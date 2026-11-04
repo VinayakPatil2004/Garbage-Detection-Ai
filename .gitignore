@@ -1,9 +1,29 @@
+# Dependencies & Environment
 node_modules/
 dist/
+gpu_env/
 .env
 .vite/
 .DS_Store
 
-gpu_env/
-backend/Dataset/
+# Python Cache
+__pycache__/
 backend/__pycache__/
+garbage_detection/__pycache__/
+*.pyc
+
+# Dataset Files & Archives (Excluding Large Datasets)
+backend/Dataset/
+backend/Dataset.zip
+Dataset/
+Dataset.zip
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Temporary / Cached Detection Uploads & Alerts
+backend/last_upload.jpg
+backend/*_backup.pt
+garbage_detection/alerts/*.jpg
+garbage_detection/alerts/*.png
