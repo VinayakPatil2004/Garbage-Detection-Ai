@@ -452,6 +452,10 @@ export default function Detection() {
                         setVideoCurrentTime(formatSeconds(videoRef.current.currentTime));
                       }
                     }}
+                    onSeeked={() => {
+                      // Automatically analyze newly seeked frame on GPU
+                      runDetection();
+                    }}
                     onLoadedMetadata={() => {
                       if (videoRef.current) {
                         setVideoTotalDuration(formatSeconds(videoRef.current.duration));
