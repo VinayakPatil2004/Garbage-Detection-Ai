@@ -122,8 +122,29 @@ def main(source, conf_threshold=None):
             fps_counter = 0
             fps_start_time = time.time()
 
-        # Run inference
-        results = model(frame, conf=conf_threshold, device=device, verbose=False)
+        # Road Environment Enhancement: Motion Blur & Adaptive Lighting
+        gray_check = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blur_val = float(cv2.Laplacian(gray_check, cv2.CV_64F).var())
+        if config.ROAD_MODE_ENABLED and blur_val < config.MOTION_BLUR_FILTER_THRESHOLD:
+            # Skip blurry frame from vehicle vibration to prevent false detections
+            if config.SHOW_WINDOW:
+                cv2.putText(frame, "VEHICLE MOTION BLUR DETECTED (Skipping frame)", (20, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1)
+                cv2.imshow("Garbage Detection AI - Real Time Monitor", frame)
+                if (cv2.waitKey(1) & 0xFF) == ord('q'):
+                    break
+            continue
+
+        inference_frame = frame
+        mean_b = float(np.mean(gray_check))
+        if config.ENABLE_CLAHE_SHADOW_ADAPTATION and (mean_b < 75 or (mean_b < 110 and np.std(gray_check) > 55)):
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+            inference_frame = cv2.cvtColor(cv2.merge((clahe.apply(l), a, b)), cv2.COLOR_LAB2BGR)
+
+        # Run inference with Road Small Object Resolution (640px)
+        results = model(inference_frame, conf=conf_threshold, imgsz=config.IMGSZ_DETECTION, device=device, verbose=False)
 
         detected_waste_count = 0
         current_labels = []
@@ -138,6 +159,12 @@ def main(source, conf_threshold=None):
                 if raw_label not in config.GARBAGE_CLASSES:
                     continue
 
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+
+                # Road Surface Filter: Ignore anomalies floating high up in the sky/clouds
+                if config.ROAD_MODE_ENABLED and y1 < int(frame.shape[0] * (config.ROAD_ROI_TOP_CUT_PCT / 100.0)):
+                    continue
+
                 meta = config.GARBAGE_CLASSES[raw_label]
                 label = meta['label']
                 category = meta['category']
@@ -147,7 +174,6 @@ def main(source, conf_threshold=None):
                 current_labels.append(label)
 
                 # Draw bounding box
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
                 # Label tag

@@ -86,6 +86,9 @@ WASTE_METADATA = {
     'bowl': {'label': 'Disposable bowl', 'category': 'Plastic / Paper waste', 'priority': 'Medium', 'type': 'Plastic'},
     'book': {'label': 'Discarded paper / book', 'category': 'Paper waste · Recyclable', 'priority': 'Low', 'type': 'Paper'},
     'handbag': {'label': 'Plastic bag / pouch', 'category': 'Soft plastic · LDPE', 'priority': 'Medium', 'type': 'Plastic'},
+    'backpack': {'label': 'Discarded bag / textile', 'category': 'Solid Waste · Fabric & Debris', 'priority': 'Medium', 'type': 'Textile'},
+    'suitcase': {'label': 'Dumped luggage / bag', 'category': 'Solid Waste · Bulky Litter', 'priority': 'Medium', 'type': 'Solid Waste'},
+    'umbrella': {'label': 'Discarded umbrella', 'category': 'Solid Waste · Mixed Litter', 'priority': 'Low', 'type': 'Mixed Waste'},
 }
 
 # Clean indoor / office / decorative objects that should NEVER trigger false garbage alerts
@@ -95,6 +98,28 @@ INDOOR_CLEAN_CLASSES = {
     'refrigerator', 'microwave', 'oven', 'sink', 'vase', 'clock',
     'monitor', 'desk'
 }
+
+def adapt_road_environmental_lighting(img_np):
+    """
+    Road Environment Parameter 1:
+    Adaptive CLAHE & Night/Shadow Correction for asphalt roads, tree shadows, and low-light CCTV.
+    """
+    try:
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        mean_b = float(np.mean(gray))
+        blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        
+        # If low light (night street) or extreme contrast (harsh sunlight & dark road shadows)
+        if mean_b < 75 or (mean_b < 110 and np.std(gray) > 55):
+            lab = cv2.cvtColor(img_np, cv2.COLOR_RGB2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+            l_enh = clahe.apply(l)
+            enhanced = cv2.merge((l_enh, a, b))
+            return cv2.cvtColor(enhanced, cv2.COLOR_LAB2RGB), blur_score, True, mean_b
+        return img_np, blur_score, False, mean_b
+    except Exception:
+        return img_np, 100.0, False, 128.0
 
 def analyze_visual_texture(img_np):
     """Measures edge density and texture roughness to recognize mass scattered litter/plastic dumps."""
@@ -155,17 +180,22 @@ def get_stats():
 def analyze_image_unified(img, conf_thresh=0.35):
     """
     State-of-the-art Multi-Signal Garbage Detection Pipeline (>95% Real-World Accuracy):
-    Signal 1: YOLO Object Detection for physical waste items (bottles, cups, plastics).
+    Signal 1: YOLO Object Detection at 640px for physical waste items (bottles, cups, roadside litter).
     Signal 2: Custom Fine-Tuned Classifier (garbage_best.pt at 256px native resolution).
     Signal 3: Spatial Person-Aware Context (detects waste baskets and held debris when workers are in frame).
     Signal 4: Computer Vision High-Density Litter Analysis (detects massive scattered coastal/street dumps).
+    Road Parameters: Adaptive CLAHE for shadows/night, Motion Blur check, Sky anomaly rejection.
     """
     img_width, img_height = img.size
     start_time = time.time()
     img_np = np.array(img)
 
-    # --- Signal 1: Object Detection (yolov8s.pt with conf >= 0.35) ---
-    det_res = detector_model(img, conf=conf_thresh, device=device, verbose=False)
+    # Road Environment Parameter: Night / Harsh Shadow Adaptive Enhancement
+    adapted_np, blur_score, is_lighting_enhanced, mean_brightness = adapt_road_environmental_lighting(img_np)
+    inference_img = Image.fromarray(adapted_np) if is_lighting_enhanced else img
+
+    # --- Signal 1: Object Detection (yolov8s.pt with conf >= 0.35 at native 640px) ---
+    det_res = detector_model(inference_img, conf=conf_thresh, imgsz=640, device=device, verbose=False)
     predictions = []
     detected_types = set()
     person_boxes = []
@@ -199,6 +229,10 @@ def analyze_image_unified(img, conf_thresh=0.35):
                 indoor_objects_detected.append(cls_name)
 
             if cls_name in WASTE_METADATA:
+                # Road Surface Filter: ignore tiny anomalies floating high up in the sky (< 10% height)
+                if top_pct < 10.0 and height_pct < 12.0:
+                    continue
+
                 meta = WASTE_METADATA[cls_name]
                 predictions.append({
                     "id": pred_id,
@@ -392,6 +426,14 @@ def analyze_image_unified(img, conf_thresh=0.35):
         "models_used": {
             "classifier": os.path.basename(classifier_path) if classifier_path else None,
             "detector": os.path.basename(detector_path) if detector_path else None
+        },
+        "road_parameters": {
+            "lighting_adapted": is_lighting_enhanced,
+            "mean_brightness": round(mean_brightness, 1),
+            "blur_score": round(blur_score, 1),
+            "motion_blur_detected": blur_score < 40.0,
+            "resolution_mode": "640px (Small Object Enhanced)",
+            "environment": "Indoor / Office" if has_indoor_context else "Outdoor / Road & Street"
         }
     }
 

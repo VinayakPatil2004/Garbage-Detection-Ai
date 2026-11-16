@@ -65,6 +65,14 @@ GARBAGE_CLASSES = {
 ALERT_COOLDOWN_SECONDS = 60
 SHOW_WINDOW = True
 
+# --- Road & Street Garbage Detection Parameters ---
+ROAD_MODE_ENABLED = True               # Optimizes detection specifically for roads, streets, pavements
+ROAD_ROI_TOP_CUT_PCT = 20              # Excludes top 20% of frame (sky, billboards, clouds) to focus on road surface
+ENABLE_CLAHE_SHADOW_ADAPTATION = True  # Auto-balances dark street shadows and low-light night scenes
+MOTION_BLUR_FILTER_THRESHOLD = 40.0    # Skips frames with severe motion blur from moving vehicles (var < 40)
+IMGSZ_DETECTION = 640                  # 640px native resolution for small roadside debris
+MIN_CONSECUTIVE_FRAMES = 2             # Temporal consistency filter: requires consecutive detections before alert
+
 # --- Email Notification Settings ---
 ENABLE_EMAIL_ALERTS = False  # Set to True once SMTP credentials below are configured
 SMTP_SERVER = "smtp.gmail.com"
