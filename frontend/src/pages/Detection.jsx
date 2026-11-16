@@ -6,7 +6,7 @@ import {
   Leaf, LockKeyhole, LogOut, Mail, Map, MapPin, Menu, Monitor, Moon, Paperclip, Play, Pause, Plus,
   Printer, Recycle, Search, Server, Settings, ShieldCheck, Sliders, Smartphone, Sparkles,
   Square, Trash2, TrendingUp, TrendingDown, UploadCloud, Users, User, Video, Wifi, X, Zap,
-  MoreVertical, Loader2, Sparkle, Film
+  MoreVertical, Loader2, Sparkle, Film, FastForward, PlayCircle
 } from "lucide-react";
 import Card from '../components/Card.jsx';
 import SectionHead from '../components/SectionHead.jsx';
@@ -36,9 +36,17 @@ export default function Detection() {
   const [aiVerdict, setAiVerdict] = useState(null);
   const [activeDevice, setActiveDevice] = useState("GPU");
 
+  // Video Hotspots Scanner states
+  const [isScanningFullVideo, setIsScanningFullVideo] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [videoHotspots, setVideoHotspots] = useState([]);
+  const [videoCurrentTime, setVideoCurrentTime] = useState("00:00");
+  const [videoTotalDuration, setVideoTotalDuration] = useState("00:00");
+
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const scanIntervalRef = useRef(null);
+  const cancelFullScanRef = useRef(false);
 
   // Check backend health on mount
   useEffect(() => {
@@ -62,6 +70,13 @@ export default function Detection() {
     };
   }, []);
 
+  const formatSeconds = (sec) => {
+    if (isNaN(sec)) return "00:00";
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  };
+
   const handleFile = (file) => {
     if (!file) return;
     const name = file.name.toLowerCase();
@@ -75,6 +90,9 @@ export default function Detection() {
     setAiVerdict(null);
     setAssigned(false);
     setContinuousScan(false);
+    setVideoHotspots([]);
+    setScanProgress(0);
+    cancelFullScanRef.current = true;
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
@@ -88,6 +106,7 @@ export default function Detection() {
   };
 
   const removeMedia = () => {
+    cancelFullScanRef.current = true;
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
@@ -100,24 +119,47 @@ export default function Detection() {
     setPredictions([]);
     setAiVerdict(null);
     setAssigned(false);
+    setVideoHotspots([]);
+    setScanProgress(0);
   };
 
+  // High performance downscaled frame capture (640px)
   const captureVideoFrame = () => {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return null;
     const canvas = canvasRef.current || document.createElement("canvas");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const targetW = 640;
+    const aspect = (video.videoHeight || 360) / (video.videoWidth || 640);
+    const targetH = Math.round(targetW * aspect) || 360;
+    canvas.width = targetW;
+    canvas.height = targetH;
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/jpeg", 0.90);
+    ctx.drawImage(video, 0, 0, targetW, targetH);
+    return canvas.toDataURL("image/jpeg", 0.82);
+  };
+
+  const processFrameData = (data) => {
+    const preds = data.predictions || [];
+    setPredictions(preds);
+    setExecutionTime(data.execution_time || "0.15s");
+    setAiVerdict({
+      verdict: data.verdict || (preds.length > 0 ? "Garbage Detected" : "Clean Area"),
+      isGarbage: data.is_garbage !== undefined ? data.is_garbage : preds.length > 0,
+      confidence: data.classification 
+        ? (data.is_garbage ? data.classification.garbage_confidence : data.classification.clean_confidence)
+        : (preds[0]?.confidence || 95),
+      models: data.models_used || { classifier: "garbage_best.pt", detector: "yolov8s.pt" },
+      device: data.device || activeDevice,
+      roadParams: data.road_parameters
+    });
+    setDetected(true);
   };
 
   const runDetection = async () => {
     if (!uploaded) return;
     setLoading(true);
 
-    // 1. If Video file: capture current frame or send video
+    // 1. If Video file: capture current frame at 640px
     if (isVideo) {
       const frameBase64 = captureVideoFrame();
       if (frameBase64) {
@@ -131,20 +173,7 @@ export default function Detection() {
           if (res.ok) {
             const data = await res.json();
             if (data.status === "success") {
-              const preds = data.predictions || [];
-              setPredictions(preds);
-              setExecutionTime(data.execution_time || "0.18s");
-              setAiVerdict({
-                verdict: data.verdict || (preds.length > 0 ? "Garbage Detected" : "Clean Area"),
-                isGarbage: data.is_garbage !== undefined ? data.is_garbage : preds.length > 0,
-                confidence: data.classification 
-                  ? (data.is_garbage ? data.classification.garbage_confidence : data.classification.clean_confidence)
-                  : (preds[0]?.confidence || 95),
-                models: data.models_used || { classifier: "garbage_best.pt", detector: "yolov8s.pt" },
-                device: data.device || activeDevice,
-                roadParams: data.road_parameters
-              });
-              setDetected(true);
+              processFrameData(data);
               setLoading(false);
               return;
             }
@@ -169,20 +198,7 @@ export default function Detection() {
         if (res.ok) {
           const data = await res.json();
           if (data.status === "success") {
-            const preds = data.predictions || [];
-            setPredictions(preds);
-            setExecutionTime(data.execution_time || "0.22s");
-            setAiVerdict({
-              verdict: data.verdict || (preds.length > 0 ? "Garbage Detected" : "Clean Area"),
-              isGarbage: data.is_garbage !== undefined ? data.is_garbage : preds.length > 0,
-              confidence: data.classification 
-                ? (data.is_garbage ? data.classification.garbage_confidence : data.classification.clean_confidence)
-                : (preds[0]?.confidence || 95),
-              models: data.models_used || { classifier: "garbage_best.pt", detector: "yolov8s.pt" },
-              device: data.device || activeDevice,
-              roadParams: data.road_parameters
-            });
-            setDetected(true);
+            processFrameData(data);
             setLoading(false);
             return;
           }
@@ -219,7 +235,7 @@ export default function Detection() {
       if (videoRef.current && videoRef.current.paused) {
         videoRef.current.play().catch(() => {});
       }
-      // Run frame inference every 850ms
+      // High-speed 640px frame scan every 700ms
       scanIntervalRef.current = setInterval(async () => {
         const frameBase64 = captureVideoFrame();
         if (!frameBase64) return;
@@ -232,26 +248,110 @@ export default function Detection() {
           if (res.ok) {
             const data = await res.json();
             if (data.status === "success") {
-              const preds = data.predictions || [];
-              setPredictions(preds);
-              setExecutionTime(data.execution_time || "0.15s");
-              setAiVerdict({
-                verdict: data.verdict || (preds.length > 0 ? "Garbage Detected" : "Clean Area"),
-                isGarbage: data.is_garbage !== undefined ? data.is_garbage : preds.length > 0,
-                confidence: data.classification 
-                  ? (data.is_garbage ? data.classification.garbage_confidence : data.classification.clean_confidence)
-                  : (preds[0]?.confidence || 95),
-                models: data.models_used || { classifier: "garbage_best.pt", detector: "yolov8s.pt" },
-                device: data.device || activeDevice,
-                roadParams: data.road_parameters
-              });
-              setDetected(true);
+              processFrameData(data);
             }
           }
         } catch (e) {
-          // ignore stream interval drops
+          // ignore drop
         }
-      }, 850);
+      }, 700);
+    }
+  };
+
+  // Full Video Auto-Scan across duration
+  const scanFullVideo = async () => {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+
+    cancelFullScanRef.current = false;
+    setIsScanningFullVideo(true);
+    setScanProgress(0);
+    setVideoHotspots([]);
+
+    const duration = video.duration;
+    // Step every 10 seconds (or 15s for long videos)
+    const step = duration > 180 ? 12 : 6;
+    const timestamps = [];
+    for (let t = 0; t <= duration; t += step) {
+      timestamps.push(t);
+    }
+
+    const hotspots = [];
+    const originalTime = video.currentTime;
+    video.pause();
+
+    for (let i = 0; i < timestamps.length; i++) {
+      if (cancelFullScanRef.current) break;
+
+      const t = timestamps[i];
+      video.currentTime = t;
+
+      // Wait for seek
+      await new Promise(r => {
+        const onSeeked = () => {
+          video.removeEventListener('seeked', onSeeked);
+          r();
+        };
+        video.addEventListener('seeked', onSeeked);
+        setTimeout(r, 400); // safety fallback
+      });
+
+      const frameBase64 = captureVideoFrame();
+      if (frameBase64) {
+        try {
+          const res = await fetch("http://localhost:5000/api/detect_frame", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ frame: frameBase64 })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const isGarb = data.is_garbage;
+            const preds = data.predictions || [];
+            hotspots.push({
+              sec: Math.round(t),
+              timeStr: formatSeconds(t),
+              isGarbage: isGarb,
+              count: preds.length,
+              labels: preds.map(p => p.label).join(", "),
+              predictions: preds,
+              confidence: isGarb ? data.classification?.garbage_confidence : 100
+            });
+            setVideoHotspots([...hotspots]);
+          }
+        } catch (err) {}
+      }
+
+      setScanProgress(Math.round(((i + 1) / timestamps.length) * 100));
+    }
+
+    setIsScanningFullVideo(false);
+    // Find first garbage spot if any, and jump to it!
+    const firstGarbage = hotspots.find(h => h.isGarbage);
+    if (firstGarbage) {
+      jumpToHotspot(firstGarbage.sec, firstGarbage.predictions);
+    } else {
+      video.currentTime = originalTime;
+    }
+  };
+
+  const jumpToHotspot = (sec, preds = null) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = sec;
+      videoRef.current.pause();
+      if (preds && preds.length > 0) {
+        setPredictions(preds);
+        setAiVerdict({
+          verdict: "Garbage Detected",
+          isGarbage: true,
+          confidence: preds[0]?.confidence || 95,
+          models: { classifier: "garbage_best.pt", detector: "yolov8s.pt" },
+          device: activeDevice
+        });
+        setDetected(true);
+      } else {
+        setTimeout(runDetection, 300);
+      }
     }
   };
 
@@ -333,60 +433,90 @@ export default function Detection() {
               className="sample-photo" 
               style={
                 isVideo 
-                  ? { minHeight: '390px', background: '#0A0F1D', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }
+                  ? { minHeight: '390px', background: '#050B14', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }
                   : typeof uploaded === "string" 
                     ? { backgroundImage: `url(${uploaded})`, backgroundSize: 'cover', backgroundPosition: 'center', position: 'relative' } 
                     : { position: 'relative' }
               }
             >
-              {/* If Video: Render native HTML5 video player */}
+              {/* If Video: Render native HTML5 video player with tightly aligned bounding boxes */}
               {isVideo ? (
-                <>
+                <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', maxHeight: '420px' }}>
                   <video
                     ref={videoRef}
                     src={uploaded}
                     controls
                     playsInline
-                    style={{ width: '100%', maxHeight: '420px', objectFit: 'contain', borderRadius: '15px' }}
+                    onTimeUpdate={() => {
+                      if (videoRef.current) {
+                        setVideoCurrentTime(formatSeconds(videoRef.current.currentTime));
+                      }
+                    }}
+                    onLoadedMetadata={() => {
+                      if (videoRef.current) {
+                        setVideoTotalDuration(formatSeconds(videoRef.current.duration));
+                      }
+                    }}
+                    style={{ display: 'block', width: '100%', maxHeight: '420px', objectFit: 'contain', borderRadius: '12px' }}
                   />
                   <canvas ref={canvasRef} style={{ display: 'none' }} />
-                </>
-              ) : (
-                /* Demo SVG backdrop if not actual image */
-                typeof uploaded !== "string" && (
-                  <>
-                    <div className="photo-sky" />
-                    <div className="photo-building building-one" />
-                    <div className="photo-building building-two" />
-                    <div className="photo-road" />
-                    <div className="trash-shape bottle" />
-                    <div className="trash-shape bag" />
-                    <div className="trash-shape cup" />
-                    <div className="trash-shape peel" />
-                    <div className="trash-shape glass" />
-                  </>
-                )
-              )}
 
-              {/* Bounding boxes overlay */}
-              {detected && predictions.map((pred) => (
-                <div 
-                  key={pred.id}
-                  className={`detect-box ${hoveredBox === pred.id ? 'active' : ''}`}
-                  style={{
-                    position: 'absolute',
-                    top: `${pred.box.y}%`,
-                    left: `${pred.box.x}%`,
-                    width: `${pred.box.width ? `${pred.box.width}%` : 'auto'}`,
-                    height: `${pred.box.height ? `${pred.box.height}%` : 'auto'}`,
-                    opacity: hoveredBox && hoveredBox !== pred.id ? 0.3 : 1,
-                    pointerEvents: 'none',
-                    transition: 'opacity 0.2s ease, border-color 0.2s ease'
-                  }}
-                >
-                  <span>{pred.label} · {pred.confidence}%</span>
+                  {/* Bounding boxes positioned perfectly relative to the video frame */}
+                  {detected && predictions.map((pred) => (
+                    <div 
+                      key={pred.id}
+                      className={`detect-box ${hoveredBox === pred.id ? 'active' : ''}`}
+                      style={{
+                        position: 'absolute',
+                        top: `${pred.box.y}%`,
+                        left: `${pred.box.x}%`,
+                        width: `${pred.box.width ? `${pred.box.width}%` : 'auto'}`,
+                        height: `${pred.box.height ? `${pred.box.height}%` : 'auto'}`,
+                        opacity: hoveredBox && hoveredBox !== pred.id ? 0.3 : 1,
+                        pointerEvents: 'none',
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      <span>{pred.label} · {pred.confidence}%</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                /* Demo SVG backdrop or Image with Bounding Boxes */
+                <>
+                  {typeof uploaded !== "string" && (
+                    <>
+                      <div className="photo-sky" />
+                      <div className="photo-building building-one" />
+                      <div className="photo-building building-two" />
+                      <div className="photo-road" />
+                      <div className="trash-shape bottle" />
+                      <div className="trash-shape bag" />
+                      <div className="trash-shape cup" />
+                      <div className="trash-shape peel" />
+                      <div className="trash-shape glass" />
+                    </>
+                  )}
+                  {detected && predictions.map((pred) => (
+                    <div 
+                      key={pred.id}
+                      className={`detect-box ${hoveredBox === pred.id ? 'active' : ''}`}
+                      style={{
+                        position: 'absolute',
+                        top: `${pred.box.y}%`,
+                        left: `${pred.box.x}%`,
+                        width: `${pred.box.width ? `${pred.box.width}%` : 'auto'}`,
+                        height: `${pred.box.height ? `${pred.box.height}%` : 'auto'}`,
+                        opacity: hoveredBox && hoveredBox !== pred.id ? 0.3 : 1,
+                        pointerEvents: 'none',
+                        transition: 'opacity 0.2s ease, border-color 0.2s ease'
+                      }}
+                    >
+                      <span>{pred.label} · {pred.confidence}%</span>
+                    </div>
+                  ))}
+                </>
+              )}
 
               <button className="remove-image" onClick={removeMedia} title="Remove media">
                 <X size={17} />
@@ -395,7 +525,20 @@ export default function Detection() {
               <div className="image-meta" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {isVideo ? <Film size={13} /> : null}
                 {fileObj ? fileObj.name : "Sample media"} 
-                <span>{isVideo ? "MP4 Video Loaded" : "Photo Ready for AI"}</span>
+                <span>{isVideo ? `Video [${videoCurrentTime} / ${videoTotalDuration}]` : "Photo Ready for AI"}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Video Scanning Progress Bar */}
+          {isScanningFullVideo && (
+            <div style={{ margin: '8px 20px 14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                <b>🚀 Auto-Scanning Entire Video on GPU...</b>
+                <span>{scanProgress}%</span>
+              </div>
+              <div style={{ width: '100%', height: '6px', background: 'var(--surface-2)', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{ width: `${scanProgress}%`, height: '100%', background: '#2563EB', transition: 'width 0.2s' }} />
               </div>
             </div>
           )}
@@ -406,20 +549,33 @@ export default function Detection() {
             </Button>
 
             {isVideo && uploaded && (
-              <Button 
-                kind={continuousScan ? "danger" : "secondary"}
-                onClick={toggleContinuousScan}
-                style={continuousScan ? { background: '#EF4444', color: '#FFF' } : {}}
-              >
-                {continuousScan ? <><Pause size={17} /> Stop Video Scan</> : <><Play size={17} /> ⚡ Live Video AI Tracking</>}
-              </Button>
+              <>
+                <Button 
+                  kind={continuousScan ? "danger" : "secondary"}
+                  onClick={toggleContinuousScan}
+                  style={continuousScan ? { background: '#EF4444', color: '#FFF' } : {}}
+                  title="Live AI detection while video is actively playing"
+                >
+                  {continuousScan ? <><Pause size={17} /> Stop Video Scan</> : <><Play size={17} /> ⚡ Live Continuous Scan</>}
+                </Button>
+
+                <Button 
+                  kind="secondary" 
+                  onClick={scanFullVideo} 
+                  disabled={isScanningFullVideo}
+                  style={{ background: '#0284C7', color: '#FFF', borderColor: '#0284C7' }}
+                  title="Automatically scan whole video duration and list all garbage spots"
+                >
+                  {isScanningFullVideo ? <><Loader2 size={17} className="animate-spin" /> Scanning...</> : <><FastForward size={17} /> 🚀 Auto-Scan Full Video</>}
+                </Button>
+              </>
             )}
 
-            <Button onClick={runDetection} disabled={!uploaded || loading}>
+            <Button onClick={runDetection} disabled={!uploaded || loading || isScanningFullVideo}>
               {loading ? (
                 <><Loader2 size={17} className="animate-spin" /> Analyzing on GPU...</>
               ) : (
-                <><Sparkles size={17} /> {isVideo ? "Analyze Current Video Frame" : "Analyze with AI"}</>
+                <><Sparkles size={17} /> {isVideo ? "Analyze Current Frame" : "Analyze with AI"}</>
               )}
             </Button>
           </div>
@@ -480,6 +636,42 @@ export default function Detection() {
                 </div>
               )}
 
+              {/* Video Timeline Hotspots list if scanned */}
+              {videoHotspots.length > 0 && (
+                <div style={{ marginBottom: '14px', background: 'var(--surface-2)', padding: '10px', borderRadius: '10px', border: '1px solid var(--line)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>
+                    <span>📍 Video Timeline Hotspots ({videoHotspots.filter(h => h.isGarbage).length} Found)</span>
+                    <span style={{ color: 'var(--muted)', fontSize: '11px' }}>Click to jump</span>
+                  </div>
+                  <div style={{ maxHeight: '110px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {videoHotspots.map((h, i) => (
+                      <button
+                        key={i}
+                        onClick={() => jumpToHotspot(h.sec, h.predictions)}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          background: h.isGarbage ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                          border: `1px solid ${h.isGarbage ? 'rgba(239, 68, 68, 0.3)' : 'transparent'}`,
+                          color: 'var(--text)',
+                          cursor: 'pointer',
+                          fontSize: '11px',
+                          textAlign: 'left'
+                        }}
+                      >
+                        <span style={{ fontWeight: 'bold', color: h.isGarbage ? '#EF4444' : '#22C55E' }}>
+                          [{h.timeStr}] {h.isGarbage ? `🚨 Garbage Detected (${h.labels || "Debris"})` : "✅ Clean Road"}
+                        </span>
+                        <span style={{ fontSize: '10px', opacity: 0.7 }}>Jump ➔</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {aiVerdict?.isGarbage ? (
                 <>
                   <div className="result-score">
@@ -492,7 +684,7 @@ export default function Detection() {
                     </div>
                   </div>
 
-                  <div className="result-items" style={{ maxHeight: "190px", overflowY: "auto" }}>
+                  <div className="result-items" style={{ maxHeight: "170px", overflowY: "auto" }}>
                     {predictions.map((item) => (
                       <div 
                         key={item.id} 
@@ -524,10 +716,10 @@ export default function Detection() {
                   </div>
                 </>
               ) : (
-                <div style={{ textAlign: 'center', padding: '30px 10px', color: 'var(--muted)' }}>
-                  <Leaf size={44} color="#22C55E" style={{ margin: '0 auto 12px', opacity: 0.8 }} />
-                  <b style={{ display: 'block', fontSize: '15px', color: 'var(--text)' }}>No Garbage Detected!</b>
-                  <p style={{ fontSize: '13px', margin: '4px 0 0' }}>The area appears completely clean and well-maintained.</p>
+                <div style={{ textAlign: 'center', padding: '24px 10px', color: 'var(--muted)' }}>
+                  <Leaf size={40} color="#22C55E" style={{ margin: '0 auto 10px', opacity: 0.8 }} />
+                  <b style={{ display: 'block', fontSize: '15px', color: 'var(--text)' }}>No Garbage Detected at this Second!</b>
+                  <p style={{ fontSize: '12px', margin: '4px 0 0' }}>This current road frame is clean. Play the video or click <b>Auto-Scan Full Video</b> to scan the whole route!</p>
                 </div>
               )}
             </>

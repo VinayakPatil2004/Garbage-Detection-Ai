@@ -169,7 +169,6 @@ def parse_image_from_request(req):
                     img_b64 = img_b64.split(',', 1)[1]
                 image_data = base64.b64decode(img_b64)
                 img = Image.open(io.BytesIO(image_data)).convert('RGB')
-                img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
                 return img
     except Exception as e:
         print(f"Error parsing image/video: {e}")
