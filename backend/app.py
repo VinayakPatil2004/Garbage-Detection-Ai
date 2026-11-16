@@ -133,16 +133,34 @@ def analyze_visual_texture(img_np):
         return 0.0, 0.0
 
 def parse_image_from_request(req):
-    """Extract PIL Image from multipart file upload or JSON base64 string."""
+    """Extract PIL Image from multipart file upload (image or MP4 video) or JSON base64 string."""
     try:
-        if 'image' in req.files:
-            img = Image.open(req.files['image'].stream).convert('RGB')
-            img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
-            return img
-        if 'file' in req.files:
-            img = Image.open(req.files['file'].stream).convert('RGB')
-            img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
-            return img
+        for field in ('image', 'file', 'video'):
+            if field in req.files:
+                f = req.files[field]
+                fn = (f.filename or "").lower()
+                if fn.endswith(('.mp4', '.avi', '.mov', '.webm', '.mkv')):
+                    video_path = os.path.join(BASE_DIR, "last_upload_video.mp4")
+                    f.save(video_path)
+                    cap = cv2.VideoCapture(video_path)
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1)
+                    target_frame = max(0, min(total_frames // 2, 30))
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+                    ret, frame = cap.read()
+                    if not ret:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = cap.read()
+                    cap.release()
+                    if ret:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        img = Image.fromarray(rgb)
+                        img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
+                        return img
+                else:
+                    img = Image.open(f.stream).convert('RGB')
+                    img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
+                    return img
+
         if req.is_json:
             data = req.get_json() or {}
             img_b64 = data.get('image') or data.get('image_base64') or data.get('frame')
@@ -154,7 +172,7 @@ def parse_image_from_request(req):
                 img.save(os.path.join(BASE_DIR, "last_upload.jpg"))
                 return img
     except Exception as e:
-        print(f"Error parsing image: {e}")
+        print(f"Error parsing image/video: {e}")
     return None
 
 @app.route('/api/health', methods=['GET'])
