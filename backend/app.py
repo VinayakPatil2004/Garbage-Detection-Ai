@@ -88,6 +88,14 @@ WASTE_METADATA = {
     'handbag': {'label': 'Plastic bag / pouch', 'category': 'Soft plastic · LDPE', 'priority': 'Medium', 'type': 'Plastic'},
 }
 
+# Clean indoor / office / decorative objects that should NEVER trigger false garbage alerts
+INDOOR_CLEAN_CLASSES = {
+    'tv', 'laptop', 'potted plant', 'keyboard', 'mouse',
+    'cell phone', 'chair', 'couch', 'bed', 'dining table',
+    'refrigerator', 'microwave', 'oven', 'sink', 'vase', 'clock',
+    'monitor', 'desk'
+}
+
 def analyze_visual_texture(img_np):
     """Measures edge density and texture roughness to recognize mass scattered litter/plastic dumps."""
     try:
@@ -161,6 +169,7 @@ def analyze_image_unified(img, conf_thresh=0.35):
     predictions = []
     detected_types = set()
     person_boxes = []
+    indoor_objects_detected = []
     has_truck = False
     truck_box = None
     pred_id = 1
@@ -186,6 +195,9 @@ def analyze_image_unified(img, conf_thresh=0.35):
                 has_truck = True
                 truck_box = {"x": left_pct, "y": top_pct, "width": width_pct, "height": height_pct}
 
+            if cls_name in INDOOR_CLEAN_CLASSES:
+                indoor_objects_detected.append(cls_name)
+
             if cls_name in WASTE_METADATA:
                 meta = WASTE_METADATA[cls_name]
                 predictions.append({
@@ -206,6 +218,8 @@ def analyze_image_unified(img, conf_thresh=0.35):
                 detected_types.add(meta.get('type', 'General'))
                 pred_id += 1
 
+    has_indoor_context = len(indoor_objects_detected) > 0
+
     # --- Signal 2: Classifier Inference (garbage_best.pt at native 256px) ---
     clean_prob = 1.0
     garb_prob = 0.0
@@ -220,7 +234,8 @@ def analyze_image_unified(img, conf_thresh=0.35):
             print(f"Classifier error: {e}")
 
     # --- Signal 3: Spatial Person-Aware Surrounding Analysis ---
-    has_person = len(person_boxes) > 0
+    # Only active for outdoor municipal cleanup scenes (not indoor office environments)
+    has_person = len(person_boxes) > 0 and not has_indoor_context
     surrounding_garbage = False
     surround_conf = 0.0
     surround_box = {"x": 20.0, "y": 45.0, "width": 60.0, "height": 45.0}
@@ -238,7 +253,7 @@ def analyze_image_unified(img, conf_thresh=0.35):
             r_r = classifier_model(crop_r, imgsz=256, device=device, verbose=False)[0].probs.data[1].item()
 
             max_p = max(r_bc, r_l, r_r)
-            if max_p >= 0.80:
+            if max_p >= 0.90 and clean_prob < 0.25:
                 surrounding_garbage = True
                 surround_conf = round(max_p * 100, 1)
                 if r_bc == max_p:
@@ -252,21 +267,30 @@ def analyze_image_unified(img, conf_thresh=0.35):
 
     # --- Signal 4: Computer Vision Massive Litter Density Check ---
     edge_density, lap_var = analyze_visual_texture(img_np)
-    # Beaches / ground covered in plastic debris have extreme edge density (> 0.15), high texture (> 800) and multiple cleanup persons or positive garbage probability
-    is_massive_litter_dump = (edge_density > 0.15 and lap_var > 800 and len(person_boxes) >= 2) or (edge_density > 0.15 and lap_var > 800 and garb_prob >= 0.05)
+    # Beaches / outdoor ground covered in plastic debris (not indoor screens with text/wires)
+    is_massive_litter_dump = (not has_indoor_context) and (
+        (edge_density > 0.18 and lap_var > 900 and len(person_boxes) >= 2 and garb_prob >= 0.50) or
+        (edge_density > 0.20 and lap_var > 1000 and garb_prob >= 0.80)
+    )
 
     # --- 5. Integrated High-Accuracy Decision ---
     is_garbage = False
 
     if len(predictions) > 0:
-        # Decision A: Specific waste objects visually located
+        # Decision A: Specific waste objects visually located (bottles, cups, plastics, etc.)
         is_garbage = True
         best_conf = max(p['confidence'] for p in predictions)
         garbage_confidence = best_conf
         clean_confidence = round(100.0 - best_conf, 1)
 
+    elif has_indoor_context:
+        # Decision B: Clean indoor / office environment (desk, computer, potted plant, furniture)
+        is_garbage = False
+        clean_confidence = max(round(clean_prob * 100, 1), 96.5)
+        garbage_confidence = round(100.0 - clean_confidence, 1)
+
     elif is_massive_litter_dump:
-        # Decision B: Massive coastal or street waste dump (e.g. beach cleanup / landfill)
+        # Decision C: Massive outdoor coastal or street waste dump
         is_garbage = True
         garbage_confidence = 97.8
         clean_confidence = 2.2
@@ -282,8 +306,8 @@ def analyze_image_unified(img, conf_thresh=0.35):
         })
         detected_types.add("Mixed Waste")
 
-    elif garb_prob >= 0.50 and clean_prob < 0.50:
-        # Decision C: Classifier firmly identifies waste heap
+    elif garb_prob >= 0.75 and clean_prob < 0.25:
+        # Decision D: Classifier firmly identifies outdoor waste heap
         is_garbage = True
         garbage_confidence = round(garb_prob * 100, 1)
         clean_confidence = round(clean_prob * 100, 1)
@@ -300,7 +324,7 @@ def analyze_image_unified(img, conf_thresh=0.35):
         detected_types.add("Mixed Waste")
 
     elif has_person and surrounding_garbage:
-        # Decision D: Workers with collection basket / sacks / vehicle
+        # Decision E: Outdoor workers with collection basket / sacks / vehicle
         is_garbage = True
         garbage_confidence = surround_conf
         clean_confidence = round(100.0 - surround_conf, 1)
@@ -316,8 +340,8 @@ def analyze_image_unified(img, conf_thresh=0.35):
         })
         detected_types.add("Mixed Waste")
 
-    elif has_truck and has_person and garb_prob >= 0.10:
-        # Decision E: Municipal garbage truck with sanitation workers
+    elif has_truck and has_person and garb_prob >= 0.25:
+        # Decision F: Municipal garbage truck with sanitation workers
         is_garbage = True
         garbage_confidence = 94.0
         clean_confidence = 6.0
@@ -334,7 +358,7 @@ def analyze_image_unified(img, conf_thresh=0.35):
         detected_types.add("Mixed Waste")
 
     else:
-        # Decision F: Clean public area (dustbins on clean sidewalk, clean parks, rooms)
+        # Decision G: Clean public area (clean sidewalk, clean parks, rooms)
         is_garbage = False
         clean_confidence = round(clean_prob * 100, 1)
         garbage_confidence = round(garb_prob * 100, 1)

@@ -134,17 +134,14 @@ def main(source, conf_threshold=None):
                 conf = float(box.conf[0].item())
                 raw_label = model.names.get(cls_id, "").lower()
 
-                # Match against garbage classes
-                if raw_label in config.GARBAGE_CLASSES:
-                    meta = config.GARBAGE_CLASSES[raw_label]
-                    label = meta['label']
-                    category = meta['category']
-                    color = meta['color']
-                else:
-                    # In case of custom garbage model or general items
-                    label = raw_label.replace('_', ' ').capitalize()
-                    category = "Litter / Waste"
-                    color = (0, 165, 255)
+                # Only track verified garbage / waste classes
+                if raw_label not in config.GARBAGE_CLASSES:
+                    continue
+
+                meta = config.GARBAGE_CLASSES[raw_label]
+                label = meta['label']
+                category = meta['category']
+                color = meta['color']
 
                 detected_waste_count += 1
                 current_labels.append(label)
@@ -209,13 +206,12 @@ def process_single_frame(model, frame, conf_threshold, alert_dir, device):
             conf = float(box.conf[0].item())
             raw_label = model.names.get(cls_id, "").lower()
 
-            if raw_label in config.GARBAGE_CLASSES:
-                meta = config.GARBAGE_CLASSES[raw_label]
-                label = meta['label']
-                color = meta['color']
-            else:
-                label = raw_label.replace('_', ' ').capitalize()
-                color = (0, 165, 255)
+            if raw_label not in config.GARBAGE_CLASSES:
+                continue
+
+            meta = config.GARBAGE_CLASSES[raw_label]
+            label = meta['label']
+            color = meta['color']
 
             count += 1
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
