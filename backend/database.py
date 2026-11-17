@@ -216,13 +216,17 @@ def add_detection_record(data):
         cursor.close()
         conn.close()
 
-def get_all_detections(limit=100, status=None, waste_type=None):
+def get_all_detections(limit=100, status=None, waste_type=None, city=None):
     """Fetches list of detections with optional filtering."""
     conn, db_type = get_db()
     cursor = conn.cursor()
     try:
         query = "SELECT * FROM detections WHERE 1=1"
         params = []
+
+        if city and city != "All":
+            query += " AND city = %s" if db_type == "mysql" else " AND city = ?"
+            params.append(city)
 
         if status and status != "All statuses":
             query += " AND status = %s" if db_type == "mysql" else " AND status = ?"
@@ -250,6 +254,13 @@ def get_all_detections(limit=100, status=None, waste_type=None):
             d['confidence'] = f"{float(d.get('confidence', 0)):.1f}%"
             d['location'] = d.get('location_name', '')
             d['type'] = d.get('waste_type', '')
+            d['city'] = d.get('city', 'Ahilyanagar')
+            try:
+                d['lat'] = float(d['latitude']) if d.get('latitude') is not None else 19.0948
+                d['lng'] = float(d['longitude']) if d.get('longitude') is not None else 74.7480
+            except Exception:
+                d['lat'] = 19.0948
+                d['lng'] = 74.7480
             results.append(d)
         return results
     finally:

@@ -533,10 +533,11 @@ def detect_frame():
 def get_history():
     """Retrieve detection records from XAMPP MySQL database."""
     try:
+        city_filter = request.args.get('city')
         status_filter = request.args.get('status')
         type_filter = request.args.get('type')
         limit = int(request.args.get('limit', 100))
-        records = database.get_all_detections(limit=limit, status=status_filter, waste_type=type_filter)
+        records = database.get_all_detections(limit=limit, status=status_filter, waste_type=type_filter, city=city_filter)
         return jsonify({
             "status": "success",
             "count": len(records),
