@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Camera, Check, ChevronDown, Clock3, Focus, Leaf, Paperclip,
-  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw
+  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw, Smartphone, ExternalLink
 } from "lucide-react";
 import Card from '../components/Card.jsx';
 import SectionHead from '../components/SectionHead.jsx';
@@ -9,6 +9,7 @@ import Button from '../components/Button.jsx';
 
 const CAMERAS = [
   { id: "webcam", label: "My Device Webcam (Live AI)" },
+  { id: "mobile-ip", label: "📱 Mobile Phone (IP Webcam App)" },
   { id: "cam-04", label: "CAM-04 · Riverside Park (Demo)" },
   { id: "cam-02", label: "CAM-02 · Market Street (Demo)" },
   { id: "cam-03", label: "CAM-03 · Central Station (Demo)" },
@@ -18,6 +19,8 @@ export default function LiveCamera() {
   const [running, setRunning] = useState(true);
   const [captured, setCaptured] = useState(false);
   const [selectedCam, setSelectedCam] = useState("webcam");
+  const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.15:8080/video");
+  const [activeMobileUrl, setActiveMobileUrl] = useState("http://192.168.1.15:8080/video");
   const [cameraError, setCameraError] = useState(null);
   const [liveBoxes, setLiveBoxes] = useState([]);
   const [liveStats, setLiveStats] = useState({
@@ -28,11 +31,11 @@ export default function LiveCamera() {
   });
   const [detectionHistory, setDetectionHistory] = useState([
     { id: 'h1', label: 'Plastic bottle', type: 'Plastic', conf: 96, time: 'Just now' },
-    { id: 'h2', label: 'Paper cup', type: 'Paper', conf: 88, time: '4 sec ago' },
-    { id: 'h3', label: 'Banana peel', type: 'Organic', conf: 92, time: '12 sec ago' },
+    { id: 'h2', label: 'Cardboard box', type: 'Paper', conf: 88, time: '4 sec ago' },
   ]);
 
   const videoRef = useRef(null);
+  const mobileImgRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
@@ -43,11 +46,15 @@ export default function LiveCamera() {
       startWebcam();
     } else {
       stopWebcam();
-      // Setup demo boxes
-      setLiveBoxes([
-        { id: 'd1', label: 'Plastic bottle', confidence: 96, box: { x: 38, y: 55, width: 14, height: 18 }, color: 'var(--blue)' },
-        { id: 'd2', label: 'Paper cup', confidence: 88, box: { x: 65, y: 60, width: 12, height: 16 }, color: 'var(--purple)' },
-      ]);
+      if (selectedCam !== "mobile-ip") {
+        // Setup demo boxes for simulated cams
+        setLiveBoxes([
+          { id: 'd1', label: 'Plastic bottle', confidence: 96, box: { x: 38, y: 55, width: 14, height: 18 }, color: 'var(--blue)' },
+          { id: 'd2', label: 'Paper cup', confidence: 88, box: { x: 65, y: 60, width: 12, height: 16 }, color: 'var(--purple)' },
+        ]);
+      } else {
+        setLiveBoxes([]);
+      }
     }
 
     return () => {
@@ -88,7 +95,7 @@ export default function LiveCamera() {
 
   // Live frame inference loop
   useEffect(() => {
-    if (!running || selectedCam !== "webcam") {
+    if (!running || (selectedCam !== "webcam" && selectedCam !== "mobile-ip")) {
       if (timerRef.current) clearInterval(timerRef.current);
       return;
     }
@@ -100,19 +107,28 @@ export default function LiveCamera() {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [running, selectedCam]);
+  }, [running, selectedCam, activeMobileUrl]);
 
   const captureAndSendFrame = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    const video = videoRef.current;
-    if (video.readyState < 2) return;
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
 
     try {
-      const canvas = canvasRef.current;
-      canvas.width = 640;
-      canvas.height = 360;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (selectedCam === "webcam") {
+        if (!videoRef.current || videoRef.current.readyState < 2) return;
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      } else if (selectedCam === "mobile-ip") {
+        if (!mobileImgRef.current || !mobileImgRef.current.complete) return;
+        try {
+          ctx.drawImage(mobileImgRef.current, 0, 0, canvas.width, canvas.height);
+        } catch (corsErr) {
+          // If browser restricts cross-origin canvas reading, show tip for desktop launcher
+          return;
+        }
+      }
 
       const base64Data = canvas.toDataURL('image/jpeg', 0.6);
 
@@ -150,7 +166,7 @@ export default function LiveCamera() {
         }
       }
     } catch (e) {
-      // Backend maybe paused or starting up
+      // Backend paused or busy
     }
   };
 
@@ -170,33 +186,57 @@ export default function LiveCamera() {
     setTimeout(() => setCaptured(false), 2000);
   };
 
-  const getCategoryIcon = (label = "") => {
-    const l = label.toLowerCase();
-    if (l.includes("bottle") || l.includes("plastic")) return <Recycle size={14} />;
-    if (l.includes("paper") || l.includes("cup")) return <Paperclip size={14} />;
-    if (l.includes("banana") || l.includes("peel") || l.includes("food") || l.includes("organic")) return <Leaf size={14} />;
-    if (l.includes("glass")) return <Trash2 size={14} />;
-    return <Focus size={14} />;
-  };
-
   return (
     <div className="page-content">
       <div className="welcome-row">
         <div>
           <div className="welcome-title">Live Edge Camera</div>
-          <div className="welcome-sub">Real-time CCTV & Webcam edge monitoring with live YOLO AI detection.</div>
+          <div className="welcome-sub">
+            Real-time CCTV, Webcam & Mobile IP Camera edge monitoring with live YOLOv8 AI detection.
+          </div>
         </div>
         <div className={running ? "status-pill" : "status-pill offline"}>
           <span /> {running ? "AI Detection Active" : "Stream Paused"}
         </div>
       </div>
 
-      <div className="camera-grid">
+      {/* Mobile IP Stream Configuration Bar */}
+      {selectedCam === "mobile-ip" && (
+        <Card style={{ marginBottom: '16px', padding: '14px 20px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Smartphone size={22} color="#10B981" />
+              <div>
+                <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Mobile IP Camera URL:</b>
+                <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                  Start "IP Webcam" app on phone, ensure same Wi-Fi, and paste stream URL:
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flex: 1, maxWidth: '420px' }}>
+              <input
+                value={mobileIpUrl}
+                onChange={(e) => setMobileIpUrl(e.target.value)}
+                placeholder="http://192.168.1.15:8080/video"
+                style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--line)', background: 'var(--surface)', fontSize: '13px', color: 'var(--ink)' }}
+              />
+              <Button kind="primary" onClick={() => setActiveMobileUrl(mobileIpUrl)}>
+                Connect
+              </Button>
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748B', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>💡 For 60 FPS GPU streaming: double-click <b>run_mobile_ip_cam.bat</b></span>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      <div className="camera-layout">
         <Card className="camera-card">
           <div className="camera-feed" style={{ position: 'relative', minHeight: '480px', background: '#0F172A', overflow: 'hidden' }}>
             
-            {/* Real Webcam Stream or Simulated CCTV background */}
-            {selectedCam === "webcam" ? (
+            {/* Real Webcam Stream */}
+            {selectedCam === "webcam" && (
               <video 
                 ref={videoRef} 
                 autoPlay 
@@ -204,7 +244,24 @@ export default function LiveCamera() {
                 muted 
                 style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }}
               />
-            ) : (
+            )}
+
+            {/* Mobile Phone IP Stream */}
+            {selectedCam === "mobile-ip" && (
+              <img
+                ref={mobileImgRef}
+                src={activeMobileUrl}
+                alt="Mobile IP Webcam Feed"
+                crossOrigin="anonymous"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
+                onError={() => {
+                  setCameraError("Cannot connect to mobile IP. Ensure phone is on same Wi-Fi and IP Webcam server is running.");
+                }}
+              />
+            )}
+
+            {/* Simulated Demo Background */}
+            {selectedCam !== "webcam" && selectedCam !== "mobile-ip" && (
               <>
                 <div className="cam-sky" />
                 <div className="cam-ground" />
@@ -237,7 +294,7 @@ export default function LiveCamera() {
                   top: `${box.box?.y ?? 40}%`,
                   width: `${box.box?.width ?? 20}%`,
                   height: `${box.box?.height ?? 22}%`,
-                  borderColor: box.priority === 'High' ? 'var(--red)' : 'var(--blue)',
+                  borderColor: box.priority === 'High' ? 'var(--red, #ef4444)' : 'var(--blue, #3b82f6)',
                   zIndex: 8,
                   transition: 'all 0.25s ease'
                 }}
@@ -272,9 +329,9 @@ export default function LiveCamera() {
                   appearance: 'none',
                   padding: '8px 36px 8px 14px',
                   borderRadius: '8px',
-                  background: 'var(--surface-2)',
+                  background: 'var(--surface-2, #f1f5f9)',
                   color: 'inherit',
-                  border: '1px solid var(--border)',
+                  border: '1px solid var(--border, #cbd5e1)',
                   fontSize: '13px',
                   fontWeight: 600,
                   cursor: 'pointer'
@@ -311,34 +368,28 @@ export default function LiveCamera() {
               <div>
                 <Clock3 size={18} />
                 <span>AI Status</span>
-                <b style={{ color: running ? 'var(--green)' : 'var(--orange)' }}>
+                <b style={{ color: running ? 'var(--green, #10b981)' : 'var(--muted)' }}>
                   {running ? "Scanning" : "Idle"}
                 </b>
               </div>
             </div>
           </Card>
 
-          <Card>
+          <Card className="recent-log-card">
             <SectionHead title="Recent detections" detail="Real-time incident log" />
-            <div className="result-items compact-results" style={{ maxHeight: '240px', overflowY: 'auto' }}>
-              {detectionHistory.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '20px 0', opacity: 0.6, fontSize: '13px' }}>
-                  No active waste detected in frame
-                </div>
-              ) : (
-                detectionHistory.map((item) => (
-                  <div key={item.id} className="result-item">
-                    <div className="result-number" style={{ background: "var(--blue-soft)", color: "var(--blue)" }}>
-                      {getCategoryIcon(item.label)}
-                    </div>
-                    <div>
-                      <b>{item.label}</b>
-                      <span>{item.time}</span>
-                    </div>
-                    <strong>{item.conf}%</strong>
+            <div className="log-list">
+              {detectionHistory.slice(0, 5).map((item) => (
+                <div key={item.id} className="log-item">
+                  <div className="log-icon">
+                    <Recycle size={15} />
                   </div>
-                ))
-              )}
+                  <div className="log-info">
+                    <b>{item.label}</b>
+                    <span>{item.time}</span>
+                  </div>
+                  <div className="log-badge">{item.conf}%</div>
+                </div>
+              ))}
             </div>
           </Card>
         </div>
