@@ -5,17 +5,24 @@ import time
 import base64
 import numpy as np
 import cv2
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from PIL import Image
 import torch
 from ultralytics import YOLO
+import database
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+
+# Initialize XAMPP MySQL / SQLite Database
+try:
+    database.init_db()
+except Exception as e:
+    print(f"⚠️ Database initialization notice: {e}")
 
 # 1. Hardware Detection
 device = 0 if torch.cuda.is_available() else "cpu"
@@ -483,6 +490,24 @@ def detect_garbage():
 
         conf = float(request.form.get('confidence', request.args.get('confidence', 0.25)))
         result = analyze_image_unified(img, conf_thresh=conf)
+
+        # Automatically persist positive detection to XAMPP MySQL
+        if result.get("is_garbage") and len(result.get("predictions", [])) > 0:
+            try:
+                top_pred = result["predictions"][0]
+                loc = request.form.get('location', request.args.get('location', 'CCTV Monitor Zone 1'))
+                db_res = database.add_detection_record({
+                    "location_name": loc,
+                    "waste_type": top_pred.get("type", "Plastic"),
+                    "confidence": top_pred.get("confidence", 90.0),
+                    "severity": top_pred.get("priority", "Medium"),
+                    "status": "Pending",
+                    "notes": f"AI localized {len(result['predictions'])} waste object(s): {', '.join([p['label'] for p in result['predictions'][:3]])}"
+                })
+                result["database_record"] = db_res
+            except Exception as dbe:
+                print(f"Notice: Failed to auto-persist detection: {dbe}")
+
         return jsonify(result)
     except Exception as e:
         print(f"API Error in /api/detect: {e}")
@@ -497,6 +522,85 @@ def detect_frame():
 
         result = analyze_image_unified(img, conf_thresh=0.25)
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ==============================================================
+# XAMPP MySQL CRUD Endpoints for History & Smart City Fleet
+# ==============================================================
+
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    """Retrieve detection records from XAMPP MySQL database."""
+    try:
+        status_filter = request.args.get('status')
+        type_filter = request.args.get('type')
+        limit = int(request.args.get('limit', 100))
+        records = database.get_all_detections(limit=limit, status=status_filter, waste_type=type_filter)
+        return jsonify({
+            "status": "success",
+            "count": len(records),
+            "data": records,
+            "database": "MySQL (XAMPP garbage_detection_db)"
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/history', methods=['POST'])
+def add_history_entry():
+    """Manually record a detection or citizen report into XAMPP MySQL."""
+    try:
+        data = request.get_json() or request.form.to_dict()
+        res = database.add_detection_record(data)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/history/<item_id>', methods=['PUT', 'PATCH'])
+def update_history_item(item_id):
+    """Update status (e.g., Pending -> Assigned -> In Progress -> Cleaned)."""
+    try:
+        body = request.get_json() or {}
+        new_status = body.get('status', 'Cleaned')
+        vehicle = body.get('assigned_vehicle')
+        res = database.update_detection_status(item_id, new_status, vehicle)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/history/<item_id>', methods=['DELETE'])
+def delete_history_item(item_id):
+    """Delete a detection record from MySQL."""
+    try:
+        res = database.delete_detection_record(item_id)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/vehicles', methods=['GET'])
+def get_vehicles():
+    """Retrieve municipal waste collection vehicle fleet from MySQL."""
+    try:
+        fleet = database.get_all_vehicles()
+        return jsonify({"status": "success", "count": len(fleet), "data": fleet})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/reports/csv', methods=['GET'])
+def export_reports_csv():
+    """Generates and downloads a real CSV export of all municipal detection records."""
+    try:
+        records = database.get_all_detections(limit=500)
+        lines = ["Tracking ID,Date,Time,Location,Waste Type,Confidence,Severity,Status,Assigned Vehicle,Notes"]
+        for r in records:
+            line = f'"{r.get("tracking_id","")}","{r.get("date","")}","{r.get("time","")}","{r.get("location_name","")}","{r.get("waste_type","")}","{r.get("confidence","")}","{r.get("severity","")}","{r.get("status","")}","{r.get("assigned_vehicle","Unassigned")}","{r.get("notes","")}"'
+            lines.append(line)
+        csv_content = "\n".join(lines)
+        return Response(
+            csv_content,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=Garbage_Detection_Report.csv"}
+        )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

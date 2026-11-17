@@ -26,23 +26,11 @@ export default function Reports() {
   const [range, setRange] = useState("Weekly");
 
   const handleDownload = (type) => {
-    let content, filename, mime;
-    if (type === "pdf") {
-      content = "Mock PDF Content for GarbageDetect Reports";
-      filename = `GarbageDetect_Report_${range}.pdf`;
-      mime = "application/pdf";
+    if (type === "csv") {
+      window.open("http://localhost:5000/api/reports/csv", "_blank");
     } else {
-      content = "ID,Date,Location,Type,Quantity,Status\nREP-1024,May 24 2025,Riverside Park,Plastic,15 kg,Assigned\nREP-1023,May 23 2025,Central District,Organic,42 kg,Cleaned\nREP-1022,May 22 2025,North River,Paper,8 kg,Pending";
-      filename = `GarbageDetect_Report_${range}.csv`;
-      mime = "text/csv";
+      window.print();
     }
-    const blob = new Blob([content], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   return <div className="page-content">
