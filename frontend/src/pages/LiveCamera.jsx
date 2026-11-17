@@ -286,9 +286,9 @@ export default function LiveCamera() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <Smartphone size={22} color="#3B82F6" />
               <div>
-                <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Cloudflare Mobile Field Broadcast:</b>
-                <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                  Open Cloudflare link on your phone, choose <b>Device Webcam</b>, and stream road video straight to this screen over the internet!
+                <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Mobile Streamer Mode (No Dashboard on Phone):</b>
+                <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                  On your mobile phone, open: <code style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(59,130,246,0.12)', color: '#2563EB', fontWeight: 700 }}>/cam</code> at the end of the Cloudflare link (e.g. <span style={{ color: '#10B981', fontWeight: 600 }}>https://...trycloudflare.com/cam</span>)
                 </div>
               </div>
             </div>

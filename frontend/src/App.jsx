@@ -15,6 +15,7 @@ import UserManagement from './pages/UserManagement.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import ProfilePage from './pages/ProfilePage.jsx';
 import AlertsPage from './pages/AlertsPage.jsx';
+import MobileStreamer from './pages/MobileStreamer.jsx';
 
 function AppRoutes({ loggedIn, handleLogin, handleLogout, dark, setDark }) {
   const navigate = useNavigate();
@@ -24,30 +25,38 @@ function AppRoutes({ loggedIn, handleLogin, handleLogout, dark, setDark }) {
     navigate(path, { state: { filter, status } });
   };
 
-  if (!loggedIn) return <Login onLogin={handleLogin} />;
-  
   return (
     <Routes>
-      <Route path="/" element={<MainLayout dark={dark} onLogout={handleLogout} />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<Dashboard navigate={navigateTo} />} />
-        <Route path="detection" element={<Detection />} />
-        <Route path="live-camera" element={<LiveCamera />} />
-        <Route path="history" element={<HistoryPage initialQuery="" initialStatus="All statuses" />} />
-        <Route path="reports" element={<Reports />} />
-        <Route path="map" element={<MapPage navigate={navigateTo} />} />
-        <Route path="waste-collection-fleet" element={<VehiclesPage />} />
-        <Route path="analytics" element={<Analytics navigate={navigateTo} />} />
-        <Route path="alerts-incidents" element={<AlertsPage />} />
-        <Route path="notifications" element={<Notifications navigate={navigateTo} />} />
-        <Route path="settings" element={<SettingsPage dark={dark} onDark={() => {
-          const newDark = !dark;
-          setDark(newDark);
-          localStorage.setItem("darkTheme", newDark);
-        }} onLogout={handleLogout} />} />
-        <Route path="profile" element={<ProfilePage />} />
-        <Route path="usermanagement" element={<UserManagement navigate={navigateTo} />} />
-      </Route>
+      {/* Dedicated Mobile-Only Full-Screen Camera (No Login Required) */}
+      <Route path="/cam" element={<MobileStreamer />} />
+      <Route path="/stream" element={<MobileStreamer />} />
+
+      {/* Main Admin Application */}
+      {!loggedIn ? (
+        <Route path="*" element={<Login onLogin={handleLogin} />} />
+      ) : (
+        <Route path="/" element={<MainLayout dark={dark} onLogout={handleLogout} />}>
+          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard navigate={navigateTo} />} />
+          <Route path="detection" element={<Detection />} />
+          <Route path="live-camera" element={<LiveCamera />} />
+          <Route path="history" element={<HistoryPage initialQuery="" initialStatus="All statuses" />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="map" element={<MapPage navigate={navigateTo} />} />
+          <Route path="waste-collection-fleet" element={<VehiclesPage />} />
+          <Route path="analytics" element={<Analytics navigate={navigateTo} />} />
+          <Route path="alerts-incidents" element={<AlertsPage />} />
+          <Route path="notifications" element={<Notifications navigate={navigateTo} />} />
+          <Route path="settings" element={<SettingsPage dark={dark} onDark={() => {
+            const newDark = !dark;
+            setDark(newDark);
+            localStorage.setItem("darkTheme", newDark);
+          }} onLogout={handleLogout} />} />
+          <Route path="profile" element={<ProfilePage />} />
+          <Route path="usermanagement" element={<UserManagement navigate={navigateTo} />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Route>
+      )}
     </Routes>
   );
 }
