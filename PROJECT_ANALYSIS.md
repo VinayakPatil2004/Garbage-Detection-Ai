@@ -153,7 +153,20 @@ Dataset Structure:
 
 ---
 
-## 🚀 ८. सिस्टीम रन गाईड (Quick Run Commands)
+## 💾 ८. XAMPP MySQL डेटाबेस इंटिग्रेशन (Database & Persistence)
+
+प्रणाली आता **XAMPP MySQL (MariaDB)** शी थेट जोडलेली आहे:
+
+* **डेटाबेस नाव:** `garbage_detection_db`
+* **होस्ट व पोर्ट:** `localhost:3306` (User: `root`, Password: none)
+* **phpMyAdmin थेट पाहणी:** `http://localhost/phpmyadmin` वर जाऊन `garbage_detection_db` डेटाबेस आणि त्यातील तक्ते तपासू शकता.
+* **टेबल १ (`detections`):** प्रत्येक AI डिटेक्शनचा ट्रॅकिंग आयडी (`DET-20261117-001`), तारीख-वेळ, वॉर्ड लोकेशन, कचऱ्याचा प्रकार (Plastic, Cardboard, Metal), अचूकता (Confidence %), गंभीरता (Severity) आणि स्थिती (Pending / Assigned / Cleaned).
+* **टेबल २ (`vehicles`):** महापालिकेच्या कचरा संकलन गाड्या (Hydraulic Compactor, Tipper Van), ड्रायव्हरची माहिती, मोबाईल नंबर, वॉर्ड आणि फ्युएल लेव्हल.
+* **स्मार्ट फॉलबॅक:** जर कधी XAMPP सुरू नसेल, तरीही ॲप्लिकेशन क्रॅश न होता आपोआप स्थानिक SQLite (`backend/garbage_history.db`) वर शिफ्ट होते!
+
+---
+
+## 🚀 ९. सिस्टीम रन गाईड (Quick Run Commands)
 
 ### पर्याय १: एका क्लिकवर संपूर्ण सिस्टीम सुरू करा (Recommended)
 प्रोजेक्टच्या मुख्य फोल्डरमधील **`run_all.bat`** वर डबल-क्लिक करा.  
