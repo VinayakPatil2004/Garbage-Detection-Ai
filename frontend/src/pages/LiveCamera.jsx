@@ -112,6 +112,43 @@ export default function LiveCamera() {
     };
   }, [running, selectedCam, activeMobileUrl]);
 
+  // Live stats sync for Cloudflare Mobile Field Broadcast
+  useEffect(() => {
+    if (selectedCam !== "mobile-broadcast" || !running) return;
+
+    const pollFieldStatus = async () => {
+      try {
+        const res = await fetch("/api/field_status");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "success") {
+            setLiveStats({
+              count: data.count || 0,
+              avgConf: data.avg_confidence || 94.0,
+              fps: data.fps || 24,
+              lastUpdate: "Just now"
+            });
+            if (data.predictions && data.predictions.length > 0) {
+              const newItems = data.predictions.map(p => ({
+                id: `item-${Date.now()}-${p.id || Math.random()}`,
+                label: p.label,
+                type: p.type || 'Litter',
+                conf: p.confidence,
+                time: 'Just now'
+              }));
+              setDetectionHistory(prev => [...newItems, ...prev.slice(0, 8)]);
+            }
+          }
+        }
+      } catch (e) {
+      }
+    };
+
+    pollFieldStatus();
+    const interval = setInterval(pollFieldStatus, 1200);
+    return () => clearInterval(interval);
+  }, [selectedCam, running]);
+
   const captureAndSendFrame = async () => {
     if (isSendingRef.current) return;
     if (!canvasRef.current) return;

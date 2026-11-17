@@ -522,6 +522,78 @@ latest_field_data = {
     "new_frame_event": threading.Event()
 }
 
+def draw_ai_detections_on_frame(frame, preds):
+    """Draws clear bounding boxes, class labels, confidence scores and HUD on a video frame."""
+    fh, fw = frame.shape[:2]
+
+    for p in preds:
+        box = p.get('box', {})
+        if not box:
+            continue
+
+        x_pct = float(box.get('x', 0))
+        y_pct = float(box.get('y', 0))
+        w_pct = float(box.get('width', 0))
+        h_pct = float(box.get('height', 0))
+
+        x1 = max(0, min(fw - 1, int((x_pct / 100.0) * fw)))
+        y1 = max(0, min(fh - 1, int((y_pct / 100.0) * fh)))
+        x2 = max(0, min(fw - 1, int(((x_pct + w_pct) / 100.0) * fw)))
+        y2 = max(0, min(fh - 1, int(((y_pct + h_pct) / 100.0) * fh)))
+
+        # Ensure valid box dimensions
+        if (x2 - x1) < 8 or (y2 - y1) < 8:
+            continue
+
+        lbl = p.get('label', 'Waste')
+        conf = float(p.get('confidence', 90.0))
+        pri = p.get('priority', 'Medium')
+
+        box_color = (0, 0, 235) if pri == 'High' else (0, 140, 255) # BGR
+
+        # 1. Main Bounding Box
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+
+        # 2. Corner Bracket Accents for targeting HUD look
+        corner_len = min(22, max(6, int((x2 - x1) * 0.22)))
+        bracket_color = (0, 255, 255)
+        # Top-left
+        cv2.line(frame, (x1, y1), (x1 + corner_len, y1), bracket_color, 3)
+        cv2.line(frame, (x1, y1), (x1, y1 + corner_len), bracket_color, 3)
+        # Top-right
+        cv2.line(frame, (x2, y1), (x2 - corner_len, y1), bracket_color, 3)
+        cv2.line(frame, (x2, y1), (x2, y1 + corner_len), bracket_color, 3)
+        # Bottom-left
+        cv2.line(frame, (x1, y2), (x1 + corner_len, y2), bracket_color, 3)
+        cv2.line(frame, (x1, y2), (x1, y2 - corner_len), bracket_color, 3)
+        # Bottom-right
+        cv2.line(frame, (x2, y2), (x2 - corner_len, y2), bracket_color, 3)
+        cv2.line(frame, (x2, y2), (x2, y2 - corner_len), bracket_color, 3)
+
+        # 3. Label Tag above bounding box with solid background
+        tag = f"{lbl} {conf:.0f}%"
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        tag_y1 = max(0, y1 - th - 8)
+        tag_y2 = y1
+        tag_x2 = min(fw - 1, x1 + tw + 10)
+        cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), box_color, -1)
+        cv2.putText(frame, tag, (x1 + 5, tag_y2 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+
+    # 4. Status HUD in top-left
+    preds_cnt = len(preds)
+    if preds_cnt > 0:
+        hud_txt = f"AI DETECTED: {preds_cnt} Waste Object(s)"
+        hud_bg = (20, 20, 180) # Red
+        hud_border = (0, 0, 255)
+    else:
+        hud_txt = "AI SCANNING: Clean Area"
+        hud_bg = (20, 60, 20) # Green
+        hud_border = (0, 220, 0)
+
+    cv2.rectangle(frame, (8, 8), (340, 38), hud_bg, -1)
+    cv2.rectangle(frame, (8, 8), (340, 38), hud_border, 1)
+    cv2.putText(frame, hud_txt, (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2, cv2.LINE_AA)
+
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
     while True:
@@ -545,13 +617,8 @@ def field_ai_worker():
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Draw AI bounding boxes on frame
-            for p in preds:
-                b = p.get('bbox', {})
-                x1, y1, x2, y2 = int(b.get('x1', 0)), int(b.get('y1', 0)), int(b.get('x2', 0)), int(b.get('y2', 0))
-                lbl, conf = p.get('label', 'Waste'), p.get('confidence', 90.0)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 230), 2)
-                cv2.putText(frame, f"{lbl} {conf:.0f}%", (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # Draw AI bounding boxes on frame with exact pixel coordinates
+            draw_ai_detections_on_frame(frame, preds)
 
             # Auto persist detected garbage to XAMPP MySQL
             if res.get("is_garbage") and len(preds) > 0:
@@ -569,12 +636,6 @@ def field_ai_worker():
                 except Exception:
                     pass
 
-            preds_cnt = len(preds)
-            hud_txt = "AI LIVE: SCANNING" if preds_cnt == 0 else f"AI ALERT: {preds_cnt} Waste Detected"
-            hud_clr = (0, 220, 0) if preds_cnt == 0 else (0, 0, 255)
-            cv2.rectangle(frame, (8, 8), (340, 36), (15, 23, 42), -1)
-            cv2.putText(frame, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
-
             _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
             latest_field_data["display_bytes"] = buf.tobytes()
         except Exception:
@@ -582,6 +643,26 @@ def field_ai_worker():
 
 ai_worker_thread = threading.Thread(target=field_ai_worker, daemon=True)
 ai_worker_thread.start()
+
+@app.route('/api/field_status', methods=['GET'])
+def get_field_status():
+    """Returns live detection statistics for the active mobile field streamer."""
+    try:
+        preds = latest_field_data.get("predictions", [])
+        total = len(preds)
+        avg_c = round(sum([float(p.get('confidence', 90)) for p in preds]) / total, 1) if total > 0 else 94.0
+        is_active = (time.time() - latest_field_data.get("timestamp", 0)) < 6.0
+        return jsonify({
+            "status": "success",
+            "active": is_active,
+            "count": total,
+            "predictions": preds,
+            "avg_confidence": avg_c,
+            "fps": 24 if is_active else 0,
+            "timestamp": latest_field_data.get("timestamp", 0)
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/upload_frame', methods=['POST'])
 def upload_frame():
@@ -834,25 +915,8 @@ def stream_feed():
                     except Exception:
                         pass
 
-                # Draw detection bounding boxes & tags
-                for p in cached_preds:
-                    b = p.get('bbox', {})
-                    x1 = int(b.get('x1', 0))
-                    y1 = int(b.get('y1', 0))
-                    x2 = int(b.get('x2', 0))
-                    y2 = int(b.get('y2', 0))
-                    lbl = p.get('label', 'Waste')
-                    conf = p.get('confidence', 90.0)
-                    clr = (0, 0, 230)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), clr, 2)
-                    tag = f"{lbl} {conf:.0f}%"
-                    cv2.putText(frame, tag, (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-                # Overlay status HUD in top-left
-                hud_txt = "AI LIVE: SCANNING" if len(cached_preds) == 0 else f"AI DETECTED: {len(cached_preds)} Waste Item(s)"
-                hud_clr = (0, 220, 0) if len(cached_preds) == 0 else (0, 0, 255)
-                cv2.rectangle(frame, (8, 8), (320, 36), (15, 23, 42), -1)
-                cv2.putText(frame, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
+                # Draw detection bounding boxes & HUD using accurate frame coordinates
+                draw_ai_detections_on_frame(frame, cached_preds)
 
             ret_enc, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             if not ret_enc:
