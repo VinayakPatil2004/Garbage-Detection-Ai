@@ -10,10 +10,11 @@ ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
 # 1. Detection Model (Object Detection for Bounding Boxes)
 det_candidates = [
+    os.path.join(ROOT_DIR, "backend", "garbage_detector_best.pt"),
+    os.path.join(BASE_DIR, "garbage_detector_best.pt"),
     os.path.join(ROOT_DIR, "backend", "yolov8s.pt"),
-    os.path.join(ROOT_DIR, "yolo26n.pt"),
-    os.path.join(ROOT_DIR, "backend", "yolov8n.pt"),
     os.path.join(BASE_DIR, "yolov8s.pt"),
+    os.path.join(ROOT_DIR, "backend", "yolov8n.pt"),
 ]
 DETECTION_MODEL_PATH = "yolov8s.pt"
 for p in det_candidates:
@@ -41,6 +42,15 @@ CONFIDENCE_THRESHOLD = 0.25
 # Waste / Litter classes to track and trigger alerts
 # Maps YOLO/COCO & Garbage classes to user-friendly labels and colors (BGR format for OpenCV)
 GARBAGE_CLASSES = {
+    # Specialized waste detector classes
+    'plastic': {'label': 'Plastic Waste / Polybag', 'category': 'Plastic', 'color': (255, 128, 0), 'priority': 'High'},
+    'cardboard': {'label': 'Cardboard Packaging', 'category': 'Paper', 'color': (0, 140, 255), 'priority': 'Medium'},
+    'metal': {'label': 'Metal Scrap / Can', 'category': 'Recyclable Metal', 'color': (0, 255, 255), 'priority': 'High'},
+    'paper': {'label': 'Paper Litter', 'category': 'Paper', 'color': (255, 0, 128), 'priority': 'Low'},
+    'biological': {'label': 'Organic / Food Waste', 'category': 'Organic', 'color': (0, 165, 255), 'priority': 'Medium'},
+    'other': {'label': 'Street Litter / Debris', 'category': 'Mixed Waste', 'color': (0, 0, 255), 'priority': 'Medium'},
+
+    # Standard COCO waste classes
     'bottle': {'label': 'Plastic/Glass Bottle', 'category': 'Recyclable', 'color': (255, 128, 0), 'priority': 'Medium'},
     'cup': {'label': 'Paper/Plastic Cup', 'category': 'Recyclable', 'color': (255, 0, 128), 'priority': 'Low'},
     'banana': {'label': 'Banana Peel (Organic)', 'category': 'Organic', 'color': (0, 165, 255), 'priority': 'Low'},
@@ -57,7 +67,6 @@ GARBAGE_CLASSES = {
     'book': {'label': 'Paper Waste', 'category': 'Paper', 'color': (255, 0, 128), 'priority': 'Low'},
     'garbage': {'label': 'Garbage Pile', 'category': 'Mixed Waste', 'color': (0, 0, 255), 'priority': 'High'},
     'trash': {'label': 'Trash / Litter', 'category': 'Mixed Waste', 'color': (0, 0, 255), 'priority': 'High'},
-    'plastic': {'label': 'Plastic Waste', 'category': 'Plastic', 'color': (255, 128, 0), 'priority': 'Medium'},
     'can': {'label': 'Metal Can', 'category': 'Recyclable Metal', 'color': (0, 255, 255), 'priority': 'Medium'},
 }
 

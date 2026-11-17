@@ -27,3 +27,5 @@ backend/last_upload.jpg
 backend/*_backup.pt
 garbage_detection/alerts/*.jpg
 garbage_detection/alerts/*.png
+garbage_detection/alerts/**/*.jpg
+garbage_detection/alerts/**/*.png

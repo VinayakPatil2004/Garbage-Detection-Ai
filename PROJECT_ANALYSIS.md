@@ -87,23 +87,21 @@ Dataset Structure:
                    │                                 │
                    ▼                                 ▼
 ┌─────────────────────────────────────┐┌──────────────────────────────────┐
-│ Signal 1: Object Detector (YOLOv8s) ││ Signal 2: Classifier (Custom-100)│
-│       `backend/yolov8s.pt`          ││      `backend/garbage_best.pt`   │
-│   (Locates physical waste boxes)    ││   (Trained on 46k+ images, 89.5%)│
+│ Signal 1: Waste Detector (YOLOv8)   ││ Signal 2: Indoor Shield (COCO)   │
+│   `backend/garbage_detector_best.pt`││       `backend/yolov8s.pt`       │
+│ (Plastic, Metal, Paper, Bio, Card)  ││ (Suppresses plants/screens/desks)│
 └──────────────────┬──────────────────┘└─────────────────┬────────────────┘
                    │                                     │
-                   └──────────────────┬──────────────────┘
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│               3. COMPUTER VISION & SPATIAL ENGINE                       │
-│  - Signal 3: Spatial Context (Sanitation workers + Baskets/Sacks)       │
-│  - Signal 4: Texture Roughness & Canny Edge Density (Massive dumps)     │
-│  - Signal 5: Municipal Waste Collection Fleet Context                   │
-└─────────────────────────────────────────────────────────────────────────┘
+                   ▼                                     ▼
+┌─────────────────────────────────────┐┌──────────────────────────────────┐
+│ Signal 3: Custom Classifier         ││ Signal 4: Adaptive Road Physics  │
+│      `backend/garbage_best.pt`      ││ - CLAHE Shadow Balancing         │
+│  (Scene Verification, 89.55% Top-1) ││ - Vehicle Motion Blur Rejection  │
+└─────────────────────────────────────┘└──────────────────────────────────┘
 ```
 
 ### घटक तपशील (Technology Details):
-1. **Frontend:** React 19, Vite, Tailwind CSS, Lucide Icons, Canvas API (Webcam Bounding Boxes).
+1. **Frontend:** React 19, Vite, Tailwind CSS, Lucide Icons, Canvas API (Webcam & Video Bounding Boxes).
 2. **AI & Core Backend:** Python 3.12, PyTorch `2.5.1+cu121`, Ultralytics YOLOv8, OpenCV (`cv2`), PIL, Flask, Flask-CORS.
 3. **Gateway / Proxy (Optional):** Node.js Express Gateway (Port 3000).
 4. **Standalone Edge Module:** OpenCV Desktop Window (`garbage_detection/detect.py`) सह स्वयंचलित SMTP ईमेल अलर्ट्स.
@@ -112,17 +110,18 @@ Dataset Structure:
 
 ## 🎯 ५. मल्टी-सिग्नल डिसिजन इंजिन (Multi-Signal Decision Engine)
 
-केवळ एका मॉडेलवर अवलंबून न राहता, या सिस्टीममध्ये **५ वेगवेगळ्या सिग्नल्सचे एकत्रीकरण** करून निर्णय घेतला जातो:
+केवळ एका मॉडेलवर अवलंबून न राहता, या सिस्टीममध्ये **४ वेगवेगळ्या सिग्नल्सचे एकत्रीकरण** करून निर्णय घेतला जातो:
 
-1. **Signal 1: YOLOv8 Object Detection:**  
-   बाटल्या, कप, खाद्यपदार्थ, रॅपर्स इत्यादी वस्तू शोधून स्क्रीनवर कोऑर्डिनेट्सनुसार रंगीत बाऊंडिंग बॉक्सेस तयार करतो.
-2. **Signal 2: Fine-Tuned YOLOv8 Classifier (`garbage_best.pt`):**  
-   संपूर्ण फ्रेम कचऱ्याची आहे की स्वच्छतेची हे २५६px रिझोल्यूशनवर अतिजलद गतीने तपासतो.
-3. **Signal 3: Spatial Person-Aware Context:**  
-   जर फ्रेममध्ये व्यक्ती/कर्मचारी दिसल्यास, त्यांच्या हातातील कचऱ्याच्या पिशव्या, पोती किंवा पायाजवळील ढीग तपासण्यासाठी इमेजच्या डाव्या, उजव्या आणि तळभागाचे स्वतंत्र क्रॉपिंग करून विश्लेषण करतो.
-4. **Signal 4: High-Density Litter Analysis (OpenCV Canny & Laplacian):**  
-   किनारे किंवा मैदानांवर प्लास्टिकचा विखुरलेला पातळ कचरा असल्यास Canny Edge Density (>0.15) आणि Texture Roughness (>800) मोजून ढीग ओळखतो.
-5. **Signal 5: Municipal Collection Fleet Context:**  
+1. **Signal 1: True Waste Object Detection (`backend/garbage_detector_best.pt`):**  
+   प्लास्टिकच्या पिशव्या, बाटल्या, रॅपर्स, पुठ्ठे (Cardboard), धातूचे कॅन (Metal), कागद, आणि ओला कचरा (Biological) यांवर **अचूक, खरे Bounding Boxes** काढतो.
+2. **Signal 2: Indoor Clean Context & False-Alarm Shield (`backend/yolov8s.pt`):**  
+   वेबकॅमसमोर झाडाची कुंडी (Potted Plant), मॉनिटर/टीव्ही, लॅपटॉप, खुर्ची, कीबोर्ड आल्यास सिस्टीम त्वरित ओळखते की हा इनडोअर परिसर आहे आणि **फॉल्स पॉझिटिव्ह शून्य (Zero)** करून "Clean Area" घोषित करते.
+3. **Signal 3: Fine-Tuned YOLOv8 Classifier (`garbage_best.pt`):**  
+   संपूर्ण फ्रेम कचऱ्याची आहे की स्वच्छतेची हे २५६px रिझोल्यूशनवर अतिजलद गतीने तपासतो (89.55% Validation Accuracy).
+4. **Signal 4: Road Environmental Adaptation (CLAHE & Physics):**  
+   रस्त्यावरील डांबर आणि झाडांच्या काळ्या सावल्यांमध्ये (Harsh Shadows) कॉन्ट्रास्ट सुधारण्यासाठी CLAHE ऑटो-लाइटिंग, वाहनांच्या हालचालीमुळे येणारा ब्लर फिल्टर (Laplacian < 40) आणि आकाशातील खोट्या वस्तू वगळण्यासाठी स्काय-फिल्टर.
+5. **Zero Fake Bounding Boxes Policy:**  
+   कोणत्याही काल्पनिक किंवा अंदाजे बॉक्सेसची निर्मिती बंद करण्यात आली आहे; केवळ प्रत्यक्ष डिटेक्ट झालेल्या कचऱ्यावरच बाऊंडिंग बॉक्स येतो.  
    कचरा वाहतूक करणारा महापालिकेचा ट्रक आणि कामगार ओळखतो.
 
 ---
