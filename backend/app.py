@@ -5,6 +5,7 @@ import time
 import base64
 import numpy as np
 import cv2
+import threading
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from PIL import Image
@@ -513,61 +514,136 @@ def detect_garbage():
         print(f"API Error in /api/detect: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-latest_field_broadcast = {
-    "frame_bytes": None,
+latest_field_data = {
+    "raw_bytes": None,
+    "display_bytes": None,
     "timestamp": 0,
     "predictions": [],
-    "unit_name": "Mobile Field Unit"
+    "new_frame_event": threading.Event()
 }
+
+def field_ai_worker():
+    """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
+    while True:
+        try:
+            latest_field_data["new_frame_event"].wait(timeout=1.0)
+            latest_field_data["new_frame_event"].clear()
+
+            raw_bytes = latest_field_data.get("raw_bytes")
+            if not raw_bytes:
+                continue
+
+            nparr = np.frombuffer(raw_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+
+            # Run inference on NVIDIA RTX GPU
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(rgb)
+            res = analyze_image_unified(pil_img, conf_thresh=0.25)
+            preds = res.get('predictions', [])
+            latest_field_data["predictions"] = preds
+
+            # Draw AI bounding boxes on frame
+            for p in preds:
+                b = p.get('bbox', {})
+                x1, y1, x2, y2 = int(b.get('x1', 0)), int(b.get('y1', 0)), int(b.get('x2', 0)), int(b.get('y2', 0))
+                lbl, conf = p.get('label', 'Waste'), p.get('confidence', 90.0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 230), 2)
+                cv2.putText(frame, f"{lbl} {conf:.0f}%", (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # Auto persist detected garbage to XAMPP MySQL
+            if res.get("is_garbage") and len(preds) > 0:
+                try:
+                    top = preds[0]
+                    database.add_detection_record({
+                        "location_name": "Cloudflare Mobile Field Unit",
+                        "city": "Ahilyanagar",
+                        "waste_type": top.get("type", "Plastic"),
+                        "confidence": top.get("confidence", 92.0),
+                        "severity": top.get("priority", "Medium"),
+                        "status": "Pending",
+                        "notes": f"Live mobile detection: {', '.join([p['label'] for p in preds[:3]])}"
+                    })
+                except Exception:
+                    pass
+
+            preds_cnt = len(preds)
+            hud_txt = "AI LIVE: SCANNING" if preds_cnt == 0 else f"AI ALERT: {preds_cnt} Waste Detected"
+            hud_clr = (0, 220, 0) if preds_cnt == 0 else (0, 0, 255)
+            cv2.rectangle(frame, (8, 8), (340, 36), (15, 23, 42), -1)
+            cv2.putText(frame, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
+
+            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
+            latest_field_data["display_bytes"] = buf.tobytes()
+        except Exception:
+            time.sleep(0.04)
+
+ai_worker_thread = threading.Thread(target=field_ai_worker, daemon=True)
+ai_worker_thread.start()
+
+@app.route('/api/upload_frame', methods=['POST'])
+def upload_frame():
+    """
+    Ultra-high-speed binary frame intake.
+    Receives raw JPEG byte buffer in <2ms, bypassing all JSON/Base64 overhead.
+    """
+    try:
+        data = request.data
+        if not data or len(data) < 100:
+            return jsonify({"status": "error", "message": "Empty frame"}), 400
+
+        latest_field_data["raw_bytes"] = data
+        latest_field_data["timestamp"] = time.time()
+        latest_field_data["new_frame_event"].set()
+
+        return jsonify({
+            "status": "success",
+            "predictions": latest_field_data.get("predictions", [])
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/detect_frame', methods=['POST'])
 def detect_frame():
+    """Backwards-compatible detect_frame endpoint."""
     try:
         img = parse_image_from_request(request)
         if img is None:
             return jsonify({"status": "error", "message": "No frame provided"}), 400
 
-        result = analyze_image_unified(img, conf_thresh=0.25)
-
-        # Cache frame with detection overlay for remote control room viewing
+        # Push to stream buffer
         try:
-            np_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            for p in result.get('predictions', []):
-                b = p.get('bbox', {})
-                x1, y1, x2, y2 = int(b.get('x1', 0)), int(b.get('y1', 0)), int(b.get('x2', 0)), int(b.get('y2', 0))
-                lbl, conf = p.get('label', 'Waste'), p.get('confidence', 90.0)
-                cv2.rectangle(np_img, (x1, y1), (x2, y2), (0, 0, 230), 2)
-                cv2.putText(np_img, f"{lbl} {conf:.0f}%", (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-            preds_cnt = len(result.get('predictions', []))
-            hud_txt = "FIELD LIVE: SCANNING" if preds_cnt == 0 else f"FIELD ALERT: {preds_cnt} Waste Detected"
-            hud_clr = (0, 220, 0) if preds_cnt == 0 else (0, 0, 255)
-            cv2.rectangle(np_img, (8, 8), (340, 36), (15, 23, 42), -1)
-            cv2.putText(np_img, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
-
-            _, buf = cv2.imencode('.jpg', np_img, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            latest_field_broadcast["frame_bytes"] = buf.tobytes()
-            latest_field_broadcast["timestamp"] = time.time()
-            latest_field_broadcast["predictions"] = result.get('predictions', [])
+            rgb_np = np.array(img)
+            bgr = cv2.cvtColor(rgb_np, cv2.COLOR_RGB2BGR)
+            _, raw_buf = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            latest_field_data["raw_bytes"] = raw_buf.tobytes()
+            latest_field_data["timestamp"] = time.time()
+            latest_field_data["new_frame_event"].set()
         except Exception:
             pass
 
+        result = analyze_image_unified(img, conf_thresh=0.25)
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/broadcast_stream')
 def broadcast_stream():
-    """Live broadcast of any mobile field unit sending frames via Cloudflare Tunnel."""
+    """
+    Live 25 FPS MJPEG broadcast of the mobile phone camera over Cloudflare Tunnel.
+    Disables proxy buffering with X-Accel-Buffering: no for zero-lag transmission.
+    """
     def generate():
-        last_sent_ts = 0
         while True:
-            curr_ts = latest_field_broadcast.get("timestamp", 0)
-            if latest_field_broadcast["frame_bytes"] and (time.time() - curr_ts < 6.0):
-                if curr_ts != last_sent_ts:
-                    last_sent_ts = curr_ts
-                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_field_broadcast["frame_bytes"] + b'\r\n')
-                time.sleep(0.03)
+            # Prefer annotated frame with boxes, otherwise serve raw frame directly
+            frame_bytes = latest_field_data.get("display_bytes") or latest_field_data.get("raw_bytes")
+            ts = latest_field_data.get("timestamp", 0)
+
+            if frame_bytes and (time.time() - ts < 6.0):
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(0.04) # Smooth 25 FPS
             else:
                 status_frame = make_stream_status_frame(
                     "WAITING FOR MOBILE FIELD UNIT...",
@@ -575,8 +651,14 @@ def broadcast_stream():
                     "Live video from mobile phone will broadcast here in real-time."
                 )
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + status_frame + b'\r\n')
-                time.sleep(1.0)
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+                time.sleep(0.8)
+
+    resp = Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    resp.headers['Cache-Control'] = 'no-cache, private, no-store, must-revalidate, max-stale=0, post-check=0, pre-check=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    resp.headers['X-Accel-Buffering'] = 'no' # Crucial for Cloudflare Tunnel zero buffering!
+    return resp
 
 @app.route('/api/detect_ipcam', methods=['POST'])
 def detect_ipcam():

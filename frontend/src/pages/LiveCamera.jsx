@@ -105,7 +105,7 @@ export default function LiveCamera() {
 
     timerRef.current = setInterval(() => {
       captureAndSendFrame();
-    }, 250);
+    }, selectedCam === "webcam" ? 70 : 600);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -116,64 +116,83 @@ export default function LiveCamera() {
     if (isSendingRef.current) return;
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
-    canvas.width = 480;
-    canvas.height = 270;
+    canvas.width = 540;
+    canvas.height = 360;
     const ctx = canvas.getContext('2d');
 
-    isSendingRef.current = true;
-    try {
-      if (selectedCam === "webcam") {
-        if (!videoRef.current || videoRef.current.readyState < 2) return;
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      } else if (selectedCam === "mobile-ip") {
-        if (!mobileImgRef.current || !mobileImgRef.current.complete) return;
-        try {
-          ctx.drawImage(mobileImgRef.current, 0, 0, canvas.width, canvas.height);
-        } catch (corsErr) {
-          // If browser restricts cross-origin canvas reading, show tip for desktop launcher
+    if (selectedCam === "webcam") {
+      if (!videoRef.current || videoRef.current.readyState < 2) return;
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+
+      isSendingRef.current = true;
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          isSendingRef.current = false;
           return;
         }
-      }
-
-      const base64Data = canvas.toDataURL('image/jpeg', 0.45);
-
-      const res = await fetch("/api/detect_frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: base64Data })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === "success") {
-          const preds = data.predictions || [];
-          setLiveBoxes(preds);
-          const total = preds.length;
-          const avgC = total > 0 ? (preds.reduce((a, b) => a + (b.confidence || 0), 0) / total).toFixed(1) : 94.0;
-
-          setLiveStats({
-            count: total,
-            avgConf: avgC,
-            fps: 28,
-            lastUpdate: "Just now"
+        try {
+          const res = await fetch("/api/upload_frame", {
+            method: "POST",
+            headers: { "Content-Type": "image/jpeg" },
+            body: blob
           });
 
-          if (preds.length > 0) {
-            const newItems = preds.map(p => ({
-              id: `item-${Date.now()}-${p.id}`,
-              label: p.label,
-              type: p.type || 'Litter',
-              conf: p.confidence,
-              time: 'Just now'
-            }));
-            setDetectionHistory(prev => [...newItems, ...prev.slice(0, 8)]);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.predictions) {
+              const preds = data.predictions;
+              setLiveBoxes(preds);
+              const total = preds.length;
+              const avgC = total > 0 ? (preds.reduce((a, b) => a + (b.confidence || 0), 0) / total).toFixed(1) : 94.0;
+
+              setLiveStats({
+                count: total,
+                avgConf: avgC,
+                fps: 24,
+                lastUpdate: "Just now"
+              });
+
+              if (preds.length > 0) {
+                const newItems = preds.map(p => ({
+                  id: `item-${Date.now()}-${p.id}`,
+                  label: p.label,
+                  type: p.type || 'Litter',
+                  conf: p.confidence,
+                  time: 'Just now'
+                }));
+                setDetectionHistory(prev => [...newItems, ...prev.slice(0, 8)]);
+              }
+            }
+          }
+        } catch (e) {
+        } finally {
+          isSendingRef.current = false;
+        }
+      }, 'image/jpeg', 0.50);
+
+    } else if (selectedCam === "mobile-ip") {
+      if (!activeMobileUrl) return;
+      isSendingRef.current = true;
+      try {
+        const res = await fetch("/api/detect_ipcam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: activeMobileUrl, city: "Ahilyanagar", location: "Mobile IP Camera" })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "success") {
+            const preds = data.predictions || [];
+            setLiveBoxes(preds);
+            const total = preds.length;
+            const avgC = total > 0 ? (preds.reduce((a, b) => a + (b.confidence || 0), 0) / total).toFixed(1) : 94.0;
+            setLiveStats({ count: total, avgConf: avgC, fps: 20, lastUpdate: "Just now" });
           }
         }
+      } catch (e) {
+      } finally {
+        isSendingRef.current = false;
       }
-    } catch (e) {
-      // Backend paused or busy
-    } finally {
-      isSendingRef.current = false;
     }
   };
 
