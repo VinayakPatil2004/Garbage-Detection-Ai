@@ -600,6 +600,135 @@ def detect_ipcam():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+def make_stream_status_frame(title, subtitle, detail=""):
+    """Generates an informative dark graphic status frame when stream is pending/connecting."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    frame[:] = (15, 23, 42)
+    cv2.rectangle(frame, (15, 15), (625, 465), (37, 99, 235), 2)
+    cv2.putText(frame, title, (35, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    cv2.putText(frame, subtitle, (35, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    if detail:
+        cv2.putText(frame, detail, (35, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (148, 163, 184), 1)
+    cv2.putText(frame, "IP Webcam Quick Checklist:", (35, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 128), 1)
+    cv2.putText(frame, "1. Android Phone & PC connected to same Wi-Fi network", (45, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+    cv2.putText(frame, "2. 'Start server' clicked at bottom of IP Webcam app", (45, 295), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+    cv2.putText(frame, "3. Double-check IP address shown on phone screen", (45, 330), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    return buf.tobytes()
+
+@app.route('/api/stream_feed')
+def stream_feed():
+    """
+    Live MJPEG video stream proxy for Mobile IP Webcam or USB Camera.
+    Streams directly into <img> tags in the frontend with zero CORS or Mixed Content issues.
+    Overlays real-time YOLOv8 AI detection boxes on NVIDIA RTX GPU.
+    """
+    stream_url = request.args.get('url', '').strip()
+    ai_overlay = request.args.get('ai', 'true').lower() in ('true', '1', 'yes')
+
+    if not stream_url:
+        frame_bytes = make_stream_status_frame(
+            "NO STREAM URL SPECIFIED",
+            "Please enter your Mobile IP URL above (e.g. http://192.168.1.35:8080/video)"
+        )
+        return Response((b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
+
+    # Normalize Android IP Webcam URL
+    clean_url = stream_url
+    if clean_url.endswith(':8080') or clean_url.endswith(':8080/'):
+        video_url = clean_url.rstrip('/') + '/video'
+    else:
+        video_url = clean_url
+
+    def generate():
+        import requests
+        cap = cv2.VideoCapture(video_url)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        # Fallback shot URL for IP Webcam
+        shot_url = video_url.replace('/video', '/shot.jpg') if '/video' in video_url else video_url.rstrip('/') + '/shot.jpg'
+
+        frame_count = 0
+        cached_preds = []
+        consecutive_failures = 0
+
+        while True:
+            frame = None
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    frame = None
+
+            if frame is None:
+                try:
+                    resp = requests.get(shot_url, timeout=1.8)
+                    if resp.status_code == 200:
+                        nparr = np.frombuffer(resp.content, np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                except Exception:
+                    frame = None
+
+            if frame is None:
+                consecutive_failures += 1
+                if consecutive_failures > 3:
+                    frame_bytes = make_stream_status_frame(
+                        "CONNECTING TO MOBILE IP STREAM...",
+                        f"Target URL: {video_url}",
+                        "Attempting connection... Verify phone IP Webcam server is running."
+                    )
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                    time.sleep(1.0)
+                    cap.release()
+                    cap = cv2.VideoCapture(video_url)
+                    continue
+                time.sleep(0.1)
+                continue
+
+            consecutive_failures = 0
+            frame_count += 1
+
+            if ai_overlay:
+                # Inference on every 3rd frame for high FPS throughput
+                if frame_count % 3 == 0 or len(cached_preds) == 0:
+                    try:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        pil_img = Image.fromarray(rgb)
+                        res = analyze_image_unified(pil_img, conf_thresh=0.25)
+                        cached_preds = res.get('predictions', [])
+                    except Exception:
+                        pass
+
+                # Draw detection bounding boxes & tags
+                for p in cached_preds:
+                    b = p.get('bbox', {})
+                    x1 = int(b.get('x1', 0))
+                    y1 = int(b.get('y1', 0))
+                    x2 = int(b.get('x2', 0))
+                    y2 = int(b.get('y2', 0))
+                    lbl = p.get('label', 'Waste')
+                    conf = p.get('confidence', 90.0)
+                    clr = (0, 0, 230)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), clr, 2)
+                    tag = f"{lbl} {conf:.0f}%"
+                    cv2.putText(frame, tag, (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+                # Overlay status HUD in top-left
+                hud_txt = "AI LIVE: SCANNING" if len(cached_preds) == 0 else f"AI DETECTED: {len(cached_preds)} Waste Item(s)"
+                hud_clr = (0, 220, 0) if len(cached_preds) == 0 else (0, 0, 255)
+                cv2.rectangle(frame, (8, 8), (320, 36), (15, 23, 42), -1)
+                cv2.putText(frame, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
+
+            ret_enc, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            if not ret_enc:
+                continue
+
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(0.03)
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
 # ==============================================================
 # XAMPP MySQL CRUD Endpoints for History & Smart City Fleet
 # ==============================================================

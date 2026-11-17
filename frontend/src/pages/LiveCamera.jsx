@@ -19,8 +19,9 @@ export default function LiveCamera() {
   const [running, setRunning] = useState(true);
   const [captured, setCaptured] = useState(false);
   const [selectedCam, setSelectedCam] = useState("webcam");
-  const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.15:8080/video");
-  const [activeMobileUrl, setActiveMobileUrl] = useState("http://192.168.1.15:8080/video");
+  const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.35:8080/video");
+  const [activeMobileUrl, setActiveMobileUrl] = useState("http://192.168.1.35:8080/video");
+  const [streamMode, setStreamMode] = useState("ai"); // 'ai' or 'direct'
   const [cameraError, setCameraError] = useState(null);
   const [liveBoxes, setLiveBoxes] = useState([]);
   const [liveStats, setLiveStats] = useState({
@@ -110,32 +111,35 @@ export default function LiveCamera() {
   }, [running, selectedCam, activeMobileUrl]);
 
   const captureAndSendFrame = async () => {
-    try {
-      let res;
-      if (selectedCam === "mobile-ip") {
-        if (!activeMobileUrl) return;
-        res = await fetch("/api/detect_ipcam", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: activeMobileUrl, city: "Ahilyanagar", location: "Mobile IP Camera" })
-        });
-      } else if (selectedCam === "webcam") {
-        if (!canvasRef.current || !videoRef.current || videoRef.current.readyState < 2) return;
-        const canvas = canvasRef.current;
-        canvas.width = 640;
-        canvas.height = 360;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const base64Data = canvas.toDataURL('image/jpeg', 0.6);
+    if (!canvasRef.current) return;
+    const canvas = canvasRef.current;
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
 
-        res = await fetch("/api/detect_frame", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image_base64: base64Data })
-        });
+    try {
+      if (selectedCam === "webcam") {
+        if (!videoRef.current || videoRef.current.readyState < 2) return;
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      } else if (selectedCam === "mobile-ip") {
+        if (!mobileImgRef.current || !mobileImgRef.current.complete) return;
+        try {
+          ctx.drawImage(mobileImgRef.current, 0, 0, canvas.width, canvas.height);
+        } catch (corsErr) {
+          // If browser restricts cross-origin canvas reading, show tip for desktop launcher
+          return;
+        }
       }
 
-      if (res && res.ok) {
+      const base64Data = canvas.toDataURL('image/jpeg', 0.6);
+
+      const res = await fetch("/api/detect_frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: base64Data })
+      });
+
+      if (res.ok) {
         const data = await res.json();
         if (data.status === "success") {
           const preds = data.predictions || [];
@@ -146,7 +150,7 @@ export default function LiveCamera() {
           setLiveStats({
             count: total,
             avgConf: avgC,
-            fps: selectedCam === "mobile-ip" ? 24 : 28,
+            fps: 28,
             lastUpdate: "Just now"
           });
 
@@ -206,23 +210,45 @@ export default function LiveCamera() {
               <div>
                 <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Mobile IP Camera URL:</b>
                 <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                  Start "IP Webcam" app on phone, ensure same Wi-Fi, and paste stream URL:
+                  Enter the IP shown at the bottom of your phone in IP Webcam app:
                 </div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '8px', flex: 1, maxWidth: '420px' }}>
+            <div style={{ display: 'flex', gap: '8px', flex: 1, maxWidth: '520px', alignItems: 'center' }}>
               <input
                 value={mobileIpUrl}
                 onChange={(e) => setMobileIpUrl(e.target.value)}
-                placeholder="http://192.168.1.15:8080/video"
+                placeholder="http://192.168.1.35:8080/video"
                 style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--line)', background: 'var(--surface)', fontSize: '13px', color: 'var(--ink)' }}
               />
-              <Button kind="primary" onClick={() => setActiveMobileUrl(mobileIpUrl)}>
+              <Button kind="primary" onClick={() => {
+                const target = mobileIpUrl.trim() || "http://192.168.1.35:8080/video";
+                setMobileIpUrl(target);
+                setActiveMobileUrl(target);
+              }}>
                 Connect
               </Button>
+              <button
+                type="button"
+                onClick={() => setStreamMode(streamMode === 'ai' ? 'direct' : 'ai')}
+                title="Toggle between AI GPU stream (processed via backend) and Direct LAN stream"
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #10B981',
+                  background: streamMode === 'ai' ? '#10B981' : 'transparent',
+                  color: streamMode === 'ai' ? '#fff' : '#10B981',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {streamMode === 'ai' ? '⚡ AI Stream' : '📡 Direct LAN'}
+              </button>
             </div>
             <div style={{ fontSize: '12px', color: '#64748B', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>💡 For 60 FPS GPU streaming: double-click <b>run_mobile_ip_cam.bat</b></span>
+              <span>💡 For 60 FPS GPU window: double-click <b>run_mobile_ip_cam.bat</b></span>
             </div>
           </div>
         </Card>
@@ -245,16 +271,37 @@ export default function LiveCamera() {
 
             {/* Mobile Phone IP Stream */}
             {selectedCam === "mobile-ip" && (
-              <img
-                ref={mobileImgRef}
-                src={activeMobileUrl}
-                alt="Mobile IP Webcam Feed"
-                crossOrigin="anonymous"
-                style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
-                onError={() => {
-                  setCameraError("Cannot connect to mobile IP. Ensure phone is on same Wi-Fi and IP Webcam server is running.");
-                }}
-              />
+              activeMobileUrl ? (
+                <img
+                  ref={mobileImgRef}
+                  key={`${activeMobileUrl}-${streamMode}`}
+                  src={streamMode === 'ai' 
+                    ? `/api/stream_feed?url=${encodeURIComponent(activeMobileUrl)}` 
+                    : activeMobileUrl}
+                  alt="Mobile IP Webcam Feed"
+                  style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
+                  onError={() => {
+                    setCameraError("Cannot connect to mobile IP. Ensure phone is on same Wi-Fi and IP Webcam server is running.");
+                  }}
+                />
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '440px', color: '#94A3B8', textAlign: 'center', padding: '30px' }}>
+                  <Smartphone size={56} color="#10B981" style={{ marginBottom: '16px' }} />
+                  <h3 style={{ color: '#F8FAFC', marginBottom: '8px', fontSize: '18px' }}>Mobile Camera Not Connected</h3>
+                  <p style={{ maxWidth: '480px', fontSize: '13px', lineHeight: '1.6', marginBottom: '18px', color: '#CBD5E1' }}>
+                    1. Open <b>IP Webcam</b> app on Android phone & tap <b>Start server</b>.<br />
+                    2. Check the IP shown on mobile screen (e.g. <code>http://192.168.1.35:8080</code>).<br />
+                    3. Enter it in the input above and click <b>Connect</b>.
+                  </p>
+                  <Button kind="primary" onClick={() => {
+                    const target = mobileIpUrl.trim() || "http://192.168.1.35:8080/video";
+                    setMobileIpUrl(target);
+                    setActiveMobileUrl(target);
+                  }}>
+                    Connect Phone Stream
+                  </Button>
+                </div>
+              )
             )}
 
             {/* Simulated Demo Background */}
