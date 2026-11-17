@@ -513,6 +513,13 @@ def detect_garbage():
         print(f"API Error in /api/detect: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+latest_field_broadcast = {
+    "frame_bytes": None,
+    "timestamp": 0,
+    "predictions": [],
+    "unit_name": "Mobile Field Unit"
+}
+
 @app.route('/api/detect_frame', methods=['POST'])
 def detect_frame():
     try:
@@ -521,9 +528,51 @@ def detect_frame():
             return jsonify({"status": "error", "message": "No frame provided"}), 400
 
         result = analyze_image_unified(img, conf_thresh=0.25)
+
+        # Cache frame with detection overlay for remote control room viewing
+        try:
+            np_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            for p in result.get('predictions', []):
+                b = p.get('bbox', {})
+                x1, y1, x2, y2 = int(b.get('x1', 0)), int(b.get('y1', 0)), int(b.get('x2', 0)), int(b.get('y2', 0))
+                lbl, conf = p.get('label', 'Waste'), p.get('confidence', 90.0)
+                cv2.rectangle(np_img, (x1, y1), (x2, y2), (0, 0, 230), 2)
+                cv2.putText(np_img, f"{lbl} {conf:.0f}%", (x1, max(y1 - 6, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            preds_cnt = len(result.get('predictions', []))
+            hud_txt = "FIELD LIVE: SCANNING" if preds_cnt == 0 else f"FIELD ALERT: {preds_cnt} Waste Detected"
+            hud_clr = (0, 220, 0) if preds_cnt == 0 else (0, 0, 255)
+            cv2.rectangle(np_img, (8, 8), (340, 36), (15, 23, 42), -1)
+            cv2.putText(np_img, hud_txt, (14, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, hud_clr, 2)
+
+            _, buf = cv2.imencode('.jpg', np_img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            latest_field_broadcast["frame_bytes"] = buf.tobytes()
+            latest_field_broadcast["timestamp"] = time.time()
+            latest_field_broadcast["predictions"] = result.get('predictions', [])
+        except Exception:
+            pass
+
         return jsonify(result)
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/broadcast_stream')
+def broadcast_stream():
+    """Live broadcast of any mobile field unit sending frames via Cloudflare Tunnel."""
+    def generate():
+        while True:
+            if latest_field_broadcast["frame_bytes"] and (time.time() - latest_field_broadcast["timestamp"] < 6.0):
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_field_broadcast["frame_bytes"] + b'\r\n')
+                time.sleep(0.5)
+            else:
+                status_frame = make_stream_status_frame(
+                    "WAITING FOR MOBILE FIELD UNIT...",
+                    "Open Cloudflare link on phone -> Select 'Integrated Web Camera'",
+                    "Live video from mobile phone will broadcast here in real-time."
+                )
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + status_frame + b'\r\n')
+                time.sleep(1.0)
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/detect_ipcam', methods=['POST'])
 def detect_ipcam():

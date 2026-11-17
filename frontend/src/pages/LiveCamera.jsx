@@ -8,10 +8,11 @@ import SectionHead from '../components/SectionHead.jsx';
 import Button from '../components/Button.jsx';
 
 const CAMERAS = [
-  { id: "webcam", label: "My Device Webcam (Live AI)" },
-  { id: "mobile-ip", label: "📱 Mobile Phone (IP Webcam App)" },
-  { id: "cam-04", label: "CAM-04 · Riverside Park (Demo)" },
-  { id: "cam-02", label: "CAM-02 · Market Street (Demo)" },
+  { id: "mobile-broadcast", label: "☁️ Mobile Field Unit (Cloudflare Live)" },
+  { id: "mobile-ip", label: "📱 Local IP Webcam (Wi-Fi App)" },
+  { id: "webcam", label: "💻 Device Webcam (Laptop/Phone)" },
+  { id: "cam-04", label: "CAM-04 · Ahilyanagar Delhi Gate (Demo)" },
+  { id: "cam-02", label: "CAM-02 · Nashik College Road (Demo)" },
   { id: "cam-03", label: "CAM-03 · Central Station (Demo)" },
 ];
 
@@ -254,17 +255,46 @@ export default function LiveCamera() {
         </Card>
       )}
 
+      {/* Cloudflare Mobile Broadcast Information Banner */}
+      {selectedCam === "mobile-broadcast" && (
+        <Card style={{ marginBottom: '16px', padding: '14px 20px', background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.25)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Smartphone size={22} color="#3B82F6" />
+              <div>
+                <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Cloudflare Mobile Field Broadcast:</b>
+                <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                  Open Cloudflare link on your phone, choose <b>Device Webcam</b>, and stream road video straight to this screen over the internet!
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: '12px', color: '#10B981', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="rec-dot" style={{ background: '#10B981' }} /> Listening for Live Mobile Transmission
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="camera-layout">
         <Card className="camera-card">
           <div className="camera-feed" style={{ position: 'relative', minHeight: '480px', background: '#0F172A', overflow: 'hidden' }}>
-            
+
+            {/* Cloudflare Remote Mobile Broadcast Feed */}
+            {selectedCam === "mobile-broadcast" && (
+              <img
+                src="/api/broadcast_stream"
+                alt="Cloudflare Mobile Broadcast Feed"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
+              />
+            )}
+
             {/* Real Webcam Stream */}
             {selectedCam === "webcam" && (
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted 
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
                 style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }}
               />
             )}
@@ -329,9 +359,9 @@ export default function LiveCamera() {
 
             {/* Live Bounding Boxes from AI Detection */}
             {running && liveBoxes.map((box, idx) => (
-              <div 
+              <div
                 key={box.id || idx}
-                className="detect-box" 
+                className="detect-box"
                 style={{
                   position: 'absolute',
                   left: `${box.box?.x ?? 30}%`,
