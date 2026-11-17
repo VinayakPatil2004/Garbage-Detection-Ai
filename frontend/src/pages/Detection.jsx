@@ -50,7 +50,7 @@ export default function Detection() {
 
   // Check backend health on mount
   useEffect(() => {
-    fetch("http://localhost:5000/api/health")
+    fetch("/api/health")
       .then(res => res.json())
       .then(data => {
         if (data.status === "ok") {
@@ -164,7 +164,7 @@ export default function Detection() {
       const frameBase64 = captureVideoFrame();
       if (frameBase64) {
         try {
-          const res = await fetch("http://localhost:5000/api/detect_frame", {
+          const res = await fetch("/api/detect_frame", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ frame: frameBase64 }),
@@ -190,7 +190,7 @@ export default function Detection() {
         const formData = new FormData();
         formData.append("image", fileObj);
 
-        const res = await fetch("http://localhost:5000/api/detect", {
+        const res = await fetch("/api/detect", {
           method: "POST",
           body: formData,
         });
@@ -240,7 +240,7 @@ export default function Detection() {
         const frameBase64 = captureVideoFrame();
         if (!frameBase64) return;
         try {
-          const res = await fetch("http://localhost:5000/api/detect_frame", {
+          const res = await fetch("/api/detect_frame", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ frame: frameBase64 })
@@ -299,7 +299,7 @@ export default function Detection() {
       const frameBase64 = captureVideoFrame();
       if (frameBase64) {
         try {
-          const res = await fetch("http://localhost:5000/api/detect_frame", {
+          const res = await fetch("/api/detect_frame", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ frame: frameBase64 })

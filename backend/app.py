@@ -525,6 +525,81 @@ def detect_frame():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/api/detect_ipcam', methods=['POST'])
+def detect_ipcam():
+    """
+    Grabs a frame directly from a mobile IP webcam stream (e.g. Android IP Webcam app)
+    Bypasses browser CORS restrictions and runs unified YOLOv8 inference.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        stream_url = data.get('url', '').strip()
+        location_name = data.get('location', 'Mobile IP Camera (Ahilyanagar)')
+        city_name = data.get('city', 'Ahilyanagar')
+
+        if not stream_url:
+            return jsonify({"status": "error", "message": "No stream URL provided"}), 400
+
+        # Optimization for Android IP Webcam: /shot.jpg is an instant single JPEG grab
+        target_url = stream_url
+        if target_url.endswith('/video'):
+            target_url = target_url.replace('/video', '/shot.jpg')
+        elif not target_url.endswith('.jpg') and not target_url.endswith('/video'):
+            target_url = target_url.rstrip('/') + '/shot.jpg'
+
+        img = None
+        # Try direct HTTP grab first (very fast)
+        try:
+            import requests
+            resp = requests.get(target_url, timeout=2.5)
+            if resp.status_code == 200:
+                nparr = np.frombuffer(resp.content, np.uint8)
+                cv_img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if cv_img is not None:
+                    img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+        except Exception:
+            pass
+
+        # Fallback to OpenCV VideoCapture if /shot.jpg failed
+        if img is None:
+            try:
+                cap = cv2.VideoCapture(stream_url)
+                if cap.isOpened():
+                    ret, cv_img = cap.read()
+                    cap.release()
+                    if ret and cv_img is not None:
+                        img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            except Exception:
+                pass
+
+        if img is None:
+            return jsonify({
+                "status": "error", 
+                "message": f"Could not connect to {stream_url}. Ensure phone IP Webcam server is running and accessible."
+            }), 400
+
+        result = analyze_image_unified(img, conf_thresh=0.25)
+        
+        # If garbage is found, automatically log to XAMPP MySQL
+        if result.get("is_garbage") and len(result.get("predictions", [])) > 0:
+            try:
+                top = result["predictions"][0]
+                database.add_detection_record({
+                    "location_name": location_name,
+                    "city": city_name,
+                    "waste_type": top.get("type", "Plastic"),
+                    "confidence": top.get("confidence", 92.0),
+                    "severity": top.get("priority", "Medium"),
+                    "status": "Pending",
+                    "notes": f"Mobile IP Webcam detection: {', '.join([p['label'] for p in result['predictions'][:3]])}"
+                })
+            except Exception as e:
+                pass
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # ==============================================================
 # XAMPP MySQL CRUD Endpoints for History & Smart City Fleet
 # ==============================================================

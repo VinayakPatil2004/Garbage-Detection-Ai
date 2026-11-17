@@ -24,7 +24,7 @@ export default function HistoryPage({ initialQuery = "", initialStatus = "All st
   const fetchDetections = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:5000/api/history");
+      const res = await fetch("/api/history");
       if (res.ok) {
         const json = await res.json();
         if (json.status === "success" && json.data) {
@@ -48,7 +48,7 @@ export default function HistoryPage({ initialQuery = "", initialStatus = "All st
   const handleAddSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch("http://localhost:5000/api/history", {
+      const res = await fetch("/api/history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -71,7 +71,7 @@ export default function HistoryPage({ initialQuery = "", initialStatus = "All st
 
   const handleDelete = async (idToDelete) => {
     try {
-      await fetch(`http://localhost:5000/api/history/${idToDelete}`, { method: "DELETE" });
+      await fetch(`/api/history/${idToDelete}`, { method: "DELETE" });
       setHistoryItems(prev => prev.filter(item => item.id !== idToDelete && item.tracking_id !== idToDelete));
     } catch (err) {
       console.error("Failed to delete record:", err);
@@ -81,7 +81,7 @@ export default function HistoryPage({ initialQuery = "", initialStatus = "All st
   const handleStatusToggle = async (item) => {
     const nextStatus = item.status === "Pending" ? "Assigned" : item.status === "Assigned" ? "Cleaned" : "Pending";
     try {
-      await fetch(`http://localhost:5000/api/history/${item.id}`, {
+      await fetch(`/api/history/${item.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: nextStatus })
@@ -119,7 +119,7 @@ export default function HistoryPage({ initialQuery = "", initialStatus = "All st
           </div>
           <Button kind="secondary" onClick={fetchDetections}><RefreshCw size={15} /> Refresh</Button>
           <Button kind="primary" onClick={() => setIsAddModalOpen(true)}><Plus size={17} /> Add</Button>
-          <Button kind="secondary" onClick={() => window.open("http://localhost:5000/api/reports/csv", "_blank")}>
+          <Button kind="secondary" onClick={() => window.open("/api/reports/csv", "_blank")}>
             <Download size={17} /> Export CSV
           </Button>
         </div>

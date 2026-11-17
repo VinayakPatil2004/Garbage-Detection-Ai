@@ -59,7 +59,7 @@ export default function MapPage({ navigate }) {
   const fetchCityDetections = async (city) => {
     setLoading(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/history?city=${city}`);
+      const res = await fetch(`/api/history?city=${city}`);
       if (res.ok) {
         const json = await res.json();
         if (json.data) {

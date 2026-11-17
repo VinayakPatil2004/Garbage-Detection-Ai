@@ -29,3 +29,7 @@ garbage_detection/alerts/*.jpg
 garbage_detection/alerts/*.png
 garbage_detection/alerts/**/*.jpg
 garbage_detection/alerts/**/*.png
+
+# Cloudflare Tunnel Executable
+cloudflared.exe
+

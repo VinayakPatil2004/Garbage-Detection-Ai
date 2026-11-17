@@ -110,35 +110,32 @@ export default function LiveCamera() {
   }, [running, selectedCam, activeMobileUrl]);
 
   const captureAndSendFrame = async () => {
-    if (!canvasRef.current) return;
-    const canvas = canvasRef.current;
-    canvas.width = 640;
-    canvas.height = 360;
-    const ctx = canvas.getContext('2d');
-
     try {
-      if (selectedCam === "webcam") {
-        if (!videoRef.current || videoRef.current.readyState < 2) return;
+      let res;
+      if (selectedCam === "mobile-ip") {
+        if (!activeMobileUrl) return;
+        res = await fetch("/api/detect_ipcam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: activeMobileUrl, city: "Ahilyanagar", location: "Mobile IP Camera" })
+        });
+      } else if (selectedCam === "webcam") {
+        if (!canvasRef.current || !videoRef.current || videoRef.current.readyState < 2) return;
+        const canvas = canvasRef.current;
+        canvas.width = 640;
+        canvas.height = 360;
+        const ctx = canvas.getContext('2d');
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      } else if (selectedCam === "mobile-ip") {
-        if (!mobileImgRef.current || !mobileImgRef.current.complete) return;
-        try {
-          ctx.drawImage(mobileImgRef.current, 0, 0, canvas.width, canvas.height);
-        } catch (corsErr) {
-          // If browser restricts cross-origin canvas reading, show tip for desktop launcher
-          return;
-        }
+        const base64Data = canvas.toDataURL('image/jpeg', 0.6);
+
+        res = await fetch("/api/detect_frame", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_base64: base64Data })
+        });
       }
 
-      const base64Data = canvas.toDataURL('image/jpeg', 0.6);
-
-      const res = await fetch("http://localhost:5000/api/detect_frame", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_base64: base64Data })
-      });
-
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         if (data.status === "success") {
           const preds = data.predictions || [];
@@ -149,7 +146,7 @@ export default function LiveCamera() {
           setLiveStats({
             count: total,
             avgConf: avgC,
-            fps: 28,
+            fps: selectedCam === "mobile-ip" ? 24 : 28,
             lastUpdate: "Just now"
           });
 

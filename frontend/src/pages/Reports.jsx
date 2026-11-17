@@ -27,7 +27,7 @@ export default function Reports() {
 
   const handleDownload = (type) => {
     if (type === "csv") {
-      window.open("http://localhost:5000/api/reports/csv", "_blank");
+      window.open("/api/reports/csv", "_blank");
     } else {
       window.print();
     }
