@@ -48,7 +48,7 @@ export default function LiveCamera() {
       startWebcam();
     } else {
       stopWebcam();
-      if (selectedCam !== "mobile-ip") {
+      if (selectedCam !== "webcam" && selectedCam !== "mobile-ip" && selectedCam !== "mobile-broadcast") {
         // Setup demo boxes for simulated cams
         setLiveBoxes([
           { id: 'd1', label: 'Plastic bottle', confidence: 96, box: { x: 38, y: 55, width: 14, height: 18 }, color: 'var(--blue)' },
@@ -305,8 +305,8 @@ export default function LiveCamera() {
                 <img
                   ref={mobileImgRef}
                   key={`${activeMobileUrl}-${streamMode}`}
-                  src={streamMode === 'ai' 
-                    ? `/api/stream_feed?url=${encodeURIComponent(activeMobileUrl)}` 
+                  src={streamMode === 'ai'
+                    ? `/api/stream_feed?url=${encodeURIComponent(activeMobileUrl)}`
                     : activeMobileUrl}
                   alt="Mobile IP Webcam Feed"
                   style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
@@ -335,7 +335,7 @@ export default function LiveCamera() {
             )}
 
             {/* Simulated Demo Background */}
-            {selectedCam !== "webcam" && selectedCam !== "mobile-ip" && (
+            {selectedCam !== "webcam" && selectedCam !== "mobile-ip" && selectedCam !== "mobile-broadcast" && (
               <>
                 <div className="cam-sky" />
                 <div className="cam-ground" />
