@@ -560,14 +560,18 @@ def detect_frame():
 def broadcast_stream():
     """Live broadcast of any mobile field unit sending frames via Cloudflare Tunnel."""
     def generate():
+        last_sent_ts = 0
         while True:
-            if latest_field_broadcast["frame_bytes"] and (time.time() - latest_field_broadcast["timestamp"] < 6.0):
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_field_broadcast["frame_bytes"] + b'\r\n')
-                time.sleep(0.5)
+            curr_ts = latest_field_broadcast.get("timestamp", 0)
+            if latest_field_broadcast["frame_bytes"] and (time.time() - curr_ts < 6.0):
+                if curr_ts != last_sent_ts:
+                    last_sent_ts = curr_ts
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + latest_field_broadcast["frame_bytes"] + b'\r\n')
+                time.sleep(0.03)
             else:
                 status_frame = make_stream_status_frame(
                     "WAITING FOR MOBILE FIELD UNIT...",
-                    "Open Cloudflare link on phone -> Select 'Integrated Web Camera'",
+                    "Open Cloudflare link on phone -> Select 'Device Webcam'",
                     "Live video from mobile phone will broadcast here in real-time."
                 )
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + status_frame + b'\r\n')

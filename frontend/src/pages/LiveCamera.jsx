@@ -41,6 +41,7 @@ export default function LiveCamera() {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
+  const isSendingRef = useRef(false);
 
   // Initialize camera stream when webcam mode is selected
   useEffect(() => {
@@ -104,7 +105,7 @@ export default function LiveCamera() {
 
     timerRef.current = setInterval(() => {
       captureAndSendFrame();
-    }, 1200);
+    }, 250);
 
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -112,12 +113,14 @@ export default function LiveCamera() {
   }, [running, selectedCam, activeMobileUrl]);
 
   const captureAndSendFrame = async () => {
+    if (isSendingRef.current) return;
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
-    canvas.width = 640;
-    canvas.height = 360;
+    canvas.width = 480;
+    canvas.height = 270;
     const ctx = canvas.getContext('2d');
 
+    isSendingRef.current = true;
     try {
       if (selectedCam === "webcam") {
         if (!videoRef.current || videoRef.current.readyState < 2) return;
@@ -132,7 +135,7 @@ export default function LiveCamera() {
         }
       }
 
-      const base64Data = canvas.toDataURL('image/jpeg', 0.6);
+      const base64Data = canvas.toDataURL('image/jpeg', 0.45);
 
       const res = await fetch("/api/detect_frame", {
         method: "POST",
@@ -169,6 +172,8 @@ export default function LiveCamera() {
       }
     } catch (e) {
       // Backend paused or busy
+    } finally {
+      isSendingRef.current = false;
     }
   };
 
@@ -358,7 +363,7 @@ export default function LiveCamera() {
             </div>
 
             {/* Live Bounding Boxes from AI Detection */}
-            {running && liveBoxes.map((box, idx) => (
+            {running && selectedCam !== "mobile-broadcast" && liveBoxes.map((box, idx) => (
               <div
                 key={box.id || idx}
                 className="detect-box"
