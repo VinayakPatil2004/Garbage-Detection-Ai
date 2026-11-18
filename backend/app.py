@@ -231,7 +231,49 @@ def get_stats():
         "device": device_name
     })
 
-def analyze_image_unified(img, conf_thresh=0.35):
+def apply_nms_predictions(predictions, iou_thresh=0.45):
+    """Suppresses duplicate overlapping bounding boxes across models, keeping only highest confidence detection."""
+    if len(predictions) <= 1:
+        return predictions
+
+    sorted_preds = sorted(predictions, key=lambda p: p.get('confidence', 0), reverse=True)
+    kept = []
+
+    for cand in sorted_preds:
+        b1 = cand.get('box', {})
+        x1_min = float(b1.get('x', 0))
+        y1_min = float(b1.get('y', 0))
+        x1_max = x1_min + float(b1.get('width', 0))
+        y1_max = y1_min + float(b1.get('height', 0))
+        area1 = max(0, x1_max - x1_min) * max(0, y1_max - y1_min)
+
+        overlap = False
+        for k in kept:
+            b2 = k.get('box', {})
+            x2_min = float(b2.get('x', 0))
+            y2_min = float(b2.get('y', 0))
+            x2_max = x2_min + float(b2.get('width', 0))
+            y2_max = y2_min + float(b2.get('height', 0))
+            area2 = max(0, x2_max - x2_min) * max(0, y2_max - y2_min)
+
+            inter_x_min = max(x1_min, x2_min)
+            inter_y_min = max(y1_min, y2_min)
+            inter_x_max = min(x1_max, x2_max)
+            inter_y_max = min(y1_max, y2_max)
+
+            if inter_x_max > inter_x_min and inter_y_max > inter_y_min:
+                inter_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+                union_area = area1 + area2 - inter_area
+                iou = inter_area / union_area if union_area > 0 else 0
+                if iou > iou_thresh:
+                    overlap = True
+                    break
+        if not overlap:
+            kept.append(cand)
+
+    return kept
+
+def analyze_image_unified(img, conf_thresh=0.38):
     """
     State-of-the-art Multi-Signal Garbage Detection Pipeline (>95% Real-World Accuracy):
     Signal 1: True Waste Object Detection (garbage_detector_best.pt at 640px) for physical street waste.
@@ -428,6 +470,9 @@ def analyze_image_unified(img, conf_thresh=0.35):
         except Exception as e:
             print(f"Classifier error: {e}")
 
+    # --- NMS Deduplication: Merge overlapping boxes across multiple models ---
+    predictions = apply_nms_predictions(predictions, iou_thresh=0.45)
+
     # --- Final Realistic Decision (NO FAKE BOUNDING BOXES) ---
     if len(predictions) > 0:
         is_garbage = True
@@ -602,10 +647,10 @@ def field_ai_worker():
             if frame is None:
                 continue
 
-            # Run inference on NVIDIA RTX GPU
+            # Run inference on NVIDIA RTX GPU with NMS and 38% precision filter
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
-            res = analyze_image_unified(pil_img, conf_thresh=0.25)
+            res = analyze_image_unified(pil_img, conf_thresh=0.38)
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
