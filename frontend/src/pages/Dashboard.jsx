@@ -46,7 +46,10 @@ export default function Dashboard({ navigate }) {
 
     const fetchWardSnapshots = async (ward = selectedWard) => {
       try {
-        const res = await fetch(`/api/dashboard/ward_snapshots?city=Nashik&ward=${ward}`);
+        const res = await fetch(`/api/dashboard/ward_snapshots?city=Nashik&ward=${ward}&_t=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Pragma": "no-cache" }
+        });
         if (res.ok) {
           const json = await res.json();
           if (json.status === "success") {

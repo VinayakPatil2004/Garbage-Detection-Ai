@@ -915,7 +915,7 @@ def get_dashboard_ward_snapshots():
             if ward_filter == 'all' or ward_filter == ward['id']:
                 enriched.append(d_copy)
 
-        return jsonify({
+        resp = jsonify({
             "status": "success",
             "city": city,
             "ward_filter": ward_filter,
@@ -924,6 +924,10 @@ def get_dashboard_ward_snapshots():
             "wards": NASHIK_WARDS,
             "snapshots": enriched
         })
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        return resp
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
