@@ -1381,8 +1381,10 @@ def update_history_item(item_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/history/<item_id>', methods=['DELETE'])
+@app.route('/api/dashboard/snapshots/<item_id>', methods=['DELETE'])
+@app.route('/api/snapshots/<item_id>', methods=['DELETE'])
 def delete_history_item(item_id):
-    """Delete a detection record from MySQL."""
+    """Delete a detection record and associated snapshot file."""
     try:
         res = database.delete_detection_record(item_id)
         return jsonify(res)

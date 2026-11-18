@@ -61,6 +61,29 @@ export default function Dashboard({ navigate }) {
       }
     };
 
+    const handleDeleteSnapshot = async (id, trackingId, e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      if (!window.confirm(`Are you sure you want to delete this snapshot (${trackingId || 'incident'})?`)) {
+        return;
+      }
+      try {
+        const res = await fetch(`/api/dashboard/snapshots/${id}`, {
+          method: "DELETE"
+        });
+        if (res.ok) {
+          if (modalSnapshot && (modalSnapshot.id === id || modalSnapshot.tracking_id === id)) {
+            setModalSnapshot(null);
+          }
+          setWardSnapshots(prev => prev.filter(s => s.id !== id && s.tracking_id !== id));
+          fetchWardSnapshots(selectedWard);
+        } else {
+          alert("Failed to delete snapshot.");
+        }
+      } catch (err) {
+        console.error("Delete snapshot error:", err);
+      }
+    };
+
     useEffect(() => {
       fetchWardSnapshots(selectedWard);
       const interval = setInterval(() => fetchWardSnapshots(selectedWard), 3000);
@@ -282,7 +305,7 @@ export default function Dashboard({ navigate }) {
                         </span>
                       </div>
 
-                      <div style={{ position: 'absolute', top: 8, right: 8 }}>
+                      <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{
                           background: item.status === 'Cleaned' ? '#10B981' : '#F59E0B',
                           color: '#fff',
@@ -294,6 +317,29 @@ export default function Dashboard({ navigate }) {
                         }}>
                           {item.status}
                         </span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSnapshot(item.id || item.tracking_id, item.tracking_id, e)}
+                          title="Delete snapshot"
+                          style={{
+                            background: 'rgba(239, 68, 68, 0.9)',
+                            border: 'none',
+                            color: '#fff',
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = '#DC2626'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.9)'}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
 
                       {/* Enlarge Hint Pill */}
@@ -385,6 +431,26 @@ export default function Dashboard({ navigate }) {
                         >
                           <ExternalLink size={12} /> Google Maps
                         </a>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSnapshot(item.id || item.tracking_id, item.tracking_id, e)}
+                          title="Delete snapshot"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '6px 9px',
+                            borderRadius: '6px',
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            color: '#DC2626',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -682,6 +748,25 @@ export default function Dashboard({ navigate }) {
 
                 {/* Action Buttons */}
                 <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSnapshot(modalSnapshot.id || modalSnapshot.tracking_id, modalSnapshot.tracking_id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      background: 'rgba(239, 68, 68, 0.12)',
+                      color: '#DC2626',
+                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Trash2 size={15} /> Delete Snapshot
+                  </button>
                   <Button kind="secondary" onClick={() => setModalSnapshot(null)}>
                     Close
                   </Button>

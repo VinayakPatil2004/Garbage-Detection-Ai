@@ -286,6 +286,7 @@ def update_detection_status(det_id, new_status, vehicle=None):
             SET status = %s, assigned_vehicle = COALESCE(%s, assigned_vehicle)
             WHERE id = %s OR tracking_id = %s
             """, (new_status, vehicle, det_id, det_id))
+            conn.commit()
         else:
             cursor.execute("""
             UPDATE detections 
@@ -299,15 +300,35 @@ def update_detection_status(det_id, new_status, vehicle=None):
         conn.close()
 
 def delete_detection_record(det_id):
-    """Deletes a detection record."""
+    """Deletes a detection record and cleans up associated snapshot file."""
     conn, db_type = get_db()
     cursor = conn.cursor()
     try:
+        img_snap = None
         if db_type == "mysql":
+            cursor.execute("SELECT image_snapshot FROM detections WHERE id = %s OR tracking_id = %s", (det_id, det_id))
+            row = cursor.fetchone()
+            if row:
+                img_snap = row.get("image_snapshot") if isinstance(row, dict) else row[0]
             cursor.execute("DELETE FROM detections WHERE id = %s OR tracking_id = %s", (det_id, det_id))
+            conn.commit()
         else:
+            cursor.execute("SELECT image_snapshot FROM detections WHERE id = ? OR tracking_id = ?", (det_id, det_id))
+            row = cursor.fetchone()
+            if row:
+                img_snap = row["image_snapshot"] if hasattr(row, '__getitem__') else row[0]
             cursor.execute("DELETE FROM detections WHERE id = ? OR tracking_id = ?", (det_id, det_id))
             conn.commit()
+
+        if img_snap:
+            try:
+                fname = os.path.basename(img_snap)
+                fpath = os.path.join(os.path.dirname(__file__), "snapshots", fname)
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception as e:
+                print("Notice: could not delete snapshot image:", e)
+
         return {"status": "success", "deleted_id": det_id}
     finally:
         cursor.close()
