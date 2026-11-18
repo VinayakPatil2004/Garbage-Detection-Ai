@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { 
   Camera, Video, VideoOff, SwitchCamera, Zap, Wifi, WifiOff, 
-  MapPin, CheckCircle2, AlertTriangle, ArrowLeft, ShieldCheck
+  MapPin, CheckCircle2, AlertTriangle, ArrowLeft, ShieldCheck,
+  Navigation, Compass
 } from "lucide-react";
 
 export default function MobileStreamer() {
@@ -18,6 +19,19 @@ export default function MobileStreamer() {
   const [cameraError, setCameraError] = useState(null);
   const [isLandscape, setIsLandscape] = useState(false);
 
+  // Live GPS Telemetry State from Smartphone
+  const [gpsData, setGpsData] = useState({
+    lat: null,
+    lng: null,
+    speedKmh: 0,
+    accuracy: null,
+    heading: null,
+    status: "locating", // "locating" | "active" | "denied" | "unsupported"
+    errorMsg: null
+  });
+  const gpsRef = useRef(gpsData);
+  gpsRef.current = gpsData;
+
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -25,6 +39,48 @@ export default function MobileStreamer() {
   const isSendingRef = useRef(false);
   const framesCountRef = useRef(0);
   const fpsTimerRef = useRef(null);
+
+  // High-accuracy live mobile GPS tracking
+  useEffect(() => {
+    if (!("geolocation" in navigator)) {
+      setGpsData(prev => ({ ...prev, status: "unsupported", errorMsg: "Geolocation not supported" }));
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const { latitude, longitude, speed, accuracy, heading } = pos.coords;
+        // speed from geolocation is in m/s; convert to km/h for municipal vehicles
+        const speedKmh = speed && speed > 0 ? Math.round(speed * 3.6) : 0;
+        setGpsData({
+          lat: latitude,
+          lng: longitude,
+          speedKmh,
+          accuracy: accuracy ? Math.round(accuracy) : null,
+          heading: heading ? Math.round(heading) : null,
+          status: "active",
+          errorMsg: null
+        });
+      },
+      (err) => {
+        console.warn("Mobile GPS tracking notice:", err);
+        setGpsData(prev => ({
+          ...prev,
+          status: err.code === 1 ? "denied" : "error",
+          errorMsg: err.code === 1 ? "Location permission denied. Please allow location in browser." : err.message
+        }));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 1000
+      }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
 
   // Initialize camera stream
   useEffect(() => {
@@ -169,12 +225,25 @@ export default function MobileStreamer() {
         if (!blob) return resolve();
 
         try {
+          const headers = { 
+            "Content-Type": "image/jpeg",
+            "Connection": "keep-alive"
+          };
+
+          // Attach live phone GPS telemetry if available
+          if (gpsRef.current.lat !== null && gpsRef.current.lng !== null) {
+            headers["X-GPS-Lat"] = String(gpsRef.current.lat);
+            headers["X-GPS-Lng"] = String(gpsRef.current.lng);
+            headers["X-GPS-Speed"] = String(gpsRef.current.speedKmh || 0);
+            if (gpsRef.current.accuracy) headers["X-GPS-Accuracy"] = String(gpsRef.current.accuracy);
+            if (gpsRef.current.heading) headers["X-GPS-Heading"] = String(gpsRef.current.heading);
+          }
+          headers["X-City"] = city;
+          headers["X-Vehicle-ID"] = vehicleId;
+
           const res = await fetch("/api/upload_frame", {
             method: "POST",
-            headers: { 
-              "Content-Type": "image/jpeg",
-              "Connection": "keep-alive"
-            },
+            headers,
             body: blob
           });
 
@@ -183,10 +252,12 @@ export default function MobileStreamer() {
             setBytesSent(prev => prev + blob.size);
             const data = await res.json();
             if (data.predictions && data.predictions.length > 0) {
+              const coords = gpsRef.current.lat ? ` @ ${gpsRef.current.lat.toFixed(4)}°, ${gpsRef.current.lng.toFixed(4)}°` : '';
               setLastDetection({
                 time: new Date().toLocaleTimeString(),
                 count: data.predictions.length,
-                labels: data.predictions.map(p => p.label).join(", ")
+                labels: data.predictions.map(p => p.label).join(", "),
+                locationNote: coords
               });
             }
           }
@@ -294,6 +365,63 @@ export default function MobileStreamer() {
         </div>
       </div>
 
+      {/* Live Phone GPS Telemetry HUD Bar */}
+      <div style={{
+        position: 'absolute',
+        top: '64px',
+        left: '12px',
+        right: '12px',
+        zIndex: 22,
+        background: 'rgba(15, 23, 42, 0.88)',
+        backdropFilter: 'blur(8px)',
+        borderRadius: '12px',
+        padding: '7px 12px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        border: gpsData.status === 'active' ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid rgba(245, 158, 11, 0.4)',
+        boxShadow: '0 4px 14px rgba(0,0,0,0.3)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+          <div style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            background: gpsData.status === 'active' ? '#10B981' : (gpsData.status === 'denied' ? '#EF4444' : '#F59E0B'),
+            boxShadow: gpsData.status === 'active' ? '0 0 10px #10B981' : 'none',
+            flexShrink: 0
+          }} />
+          <div style={{ fontSize: '11px', fontWeight: 600, color: gpsData.status === 'active' ? '#F8FAFC' : '#FDE68A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {gpsData.status === 'active' ? (
+              <span>📍 {gpsData.lat.toFixed(5)}°, {gpsData.lng.toFixed(5)}°</span>
+            ) : gpsData.status === 'denied' ? (
+              <span style={{ color: '#FCA5A5' }}>⚠️ Location Denied (Turn on Phone GPS)</span>
+            ) : (
+              <span>🛰️ Locating Mobile GPS...</span>
+            )}
+            {gpsData.accuracy && (
+              <span style={{ color: '#94A3B8', fontSize: '10px', marginLeft: '6px' }}>
+                (±{gpsData.accuracy}m)
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+          <div style={{
+            padding: '2px 8px',
+            borderRadius: '12px',
+            background: 'rgba(59, 130, 246, 0.2)',
+            color: '#60A5FA',
+            fontWeight: 700,
+            fontSize: '11px',
+            border: '1px solid rgba(59, 130, 246, 0.3)'
+          }}>
+            🚗 {gpsData.speedKmh} km/h
+          </div>
+        </div>
+      </div>
+
       {/* Main Full-Screen Camera Viewfinder */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', background: '#000' }}>
         <video
@@ -367,9 +495,9 @@ export default function MobileStreamer() {
         {lastDetection && (
           <div style={{
             position: 'absolute',
-            top: '75px',
-            left: '16px',
-            right: '16px',
+            top: '115px',
+            left: '14px',
+            right: '14px',
             background: 'rgba(239, 68, 68, 0.92)',
             backdropFilter: 'blur(8px)',
             borderRadius: '12px',
@@ -387,7 +515,7 @@ export default function MobileStreamer() {
                 AI Alert: {lastDetection.count} Waste Object(s) Detected!
               </div>
               <div style={{ fontSize: '11px', color: '#FEE2E2' }}>
-                {lastDetection.labels} · Logged to Central Database ({lastDetection.time})
+                {lastDetection.labels} {lastDetection.locationNote} · Saved to Central Database ({lastDetection.time})
               </div>
             </div>
           </div>

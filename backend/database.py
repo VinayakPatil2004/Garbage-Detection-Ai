@@ -7,6 +7,7 @@ Supports:
 
 import os
 import time
+import uuid
 import pymysql
 import sqlite3
 from datetime import datetime
@@ -97,6 +98,7 @@ def init_db():
                 tracking_id TEXT UNIQUE NOT NULL,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                 location_name TEXT NOT NULL,
+                city TEXT DEFAULT 'Ahilyanagar',
                 latitude REAL DEFAULT 18.5204,
                 longitude REAL DEFAULT 73.8567,
                 waste_type TEXT NOT NULL,
@@ -187,27 +189,29 @@ def add_detection_record(data):
     conn, db_type = get_db()
     cursor = conn.cursor()
     try:
-        tracking_id = f"DET-{datetime.now().strftime('%Y%m%d')}-{int(time.time()*1000)%10000:04d}"
+        tracking_id = f"DET-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
         loc = data.get('location_name', 'CCTV Monitor Street 4')
+        city = data.get('city', 'Ahilyanagar')
         lat = float(data.get('latitude', 18.5204))
         lng = float(data.get('longitude', 73.8567))
         wtype = data.get('waste_type', 'Plastic')
         conf = float(data.get('confidence', 90.0))
         sev = data.get('severity', 'High' if conf > 90 else 'Medium')
         status = data.get('status', 'Pending')
+        vehicle = data.get('assigned_vehicle', 'MH-17-AG-501 (Ghanta Gadi)')
         notes = data.get('notes', 'Detected via AI Edge Camera')
 
         if db_type == "mysql":
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, latitude, longitude, waste_type, confidence, severity, status, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (tracking_id, loc, lat, lng, wtype, conf, sev, status, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, notes))
             new_id = cursor.lastrowid
         else:
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, latitude, longitude, waste_type, confidence, severity, status, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (tracking_id, loc, lat, lng, wtype, conf, sev, status, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, notes))
             conn.commit()
             new_id = cursor.lastrowid
 

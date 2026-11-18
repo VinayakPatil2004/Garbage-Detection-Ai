@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Camera, Check, ChevronDown, Clock3, Focus, Leaf, Paperclip,
-  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw, Smartphone, ExternalLink, Maximize2, Minimize2
+  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw, Smartphone, ExternalLink, Maximize2, Minimize2, MapPin, Navigation
 } from "lucide-react";
 import Card from '../components/Card.jsx';
 import SectionHead from '../components/SectionHead.jsx';
@@ -27,6 +27,7 @@ export default function LiveCamera() {
   const [streamMode, setStreamMode] = useState("ai"); // 'ai' or 'direct'
   const [cameraError, setCameraError] = useState(null);
   const [liveBoxes, setLiveBoxes] = useState([]);
+  const [fieldGps, setFieldGps] = useState(null);
   const [liveStats, setLiveStats] = useState({
     count: 0,
     avgConf: 92.5,
@@ -130,6 +131,9 @@ export default function LiveCamera() {
               fps: data.fps || 24,
               lastUpdate: "Just now"
             });
+            if (data.gps) {
+              setFieldGps(data.gps);
+            }
             if (data.predictions && data.predictions.length > 0) {
               const newItems = data.predictions.map(p => ({
                 id: `item-${Date.now()}-${p.id || Math.random()}`,
@@ -338,6 +342,56 @@ export default function LiveCamera() {
               <span className="rec-dot" style={{ background: '#10B981' }} /> Listening for Live Mobile Transmission
             </div>
           </div>
+
+          {/* Live Mobile GPS Telemetry Ribbon */}
+          {fieldGps && fieldGps.active && (
+            <div style={{
+              marginTop: '12px',
+              paddingTop: '10px',
+              borderTop: '1px solid rgba(59, 130, 246, 0.15)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#0F172A', fontWeight: 700 }}>
+                  <MapPin size={16} color="#10B981" />
+                  Live Mobile GPS: <span style={{ color: '#2563EB', fontFamily: 'monospace' }}>{fieldGps.latitude.toFixed(5)}° N, {fieldGps.longitude.toFixed(5)}° E</span>
+                  <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 500 }}>(±{fieldGps.accuracy_m}m)</span>
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#0F172A', fontWeight: 700 }}>
+                  <Navigation size={15} color="#F59E0B" />
+                  Speed: <span style={{ color: '#059669' }}>{fieldGps.speed_kmh} km/h</span>
+                </span>
+                <span style={{ fontSize: '11px', color: '#64748B', background: 'rgba(0,0,0,0.05)', padding: '2px 8px', borderRadius: '6px' }}>
+                  🚛 {fieldGps.vehicle_id} · {fieldGps.city}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a
+                  href={`https://www.google.com/maps?q=${fieldGps.latitude},${fieldGps.longitude}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '5px 12px',
+                    borderRadius: '6px',
+                    background: '#10B981',
+                    color: '#fff',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    textDecoration: 'none'
+                  }}
+                >
+                  <ExternalLink size={13} /> View on Google Maps
+                </a>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
@@ -457,6 +511,25 @@ export default function LiveCamera() {
                     boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
                   }}>
                     {liveStats.count > 0 ? `🚨 ${liveStats.count} Waste Object(s) Detected` : `✅ AI Scanning: Clean Area`}
+                  </span>
+                )}
+                {selectedCam === "mobile-broadcast" && fieldGps && fieldGps.active && (
+                  <span style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    backdropFilter: 'blur(8px)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    padding: '5px 12px',
+                    borderRadius: '20px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#34D399',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                  }}>
+                    <MapPin size={12} color="#10B981" />
+                    {fieldGps.latitude.toFixed(4)}°N, {fieldGps.longitude.toFixed(4)}°E · {fieldGps.speed_kmh} km/h
                   </span>
                 )}
               </div>
@@ -649,6 +722,72 @@ export default function LiveCamera() {
               </div>
             </div>
           </Card>
+
+          {/* Live Mobile GPS Telemetry Status Card */}
+          {selectedCam === "mobile-broadcast" && (
+            <Card style={{ padding: '16px 18px', border: '1px solid rgba(16, 185, 129, 0.3)', background: 'rgba(16, 185, 129, 0.04)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#059669', fontWeight: 700, fontSize: '13px' }}>
+                  <MapPin size={16} /> Live Vehicle Telemetry (GPS)
+                </div>
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  background: fieldGps && fieldGps.active ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                  color: fieldGps && fieldGps.active ? '#10B981' : '#D97706',
+                  border: fieldGps && fieldGps.active ? '1px solid #10B981' : '1px solid #F59E0B'
+                }}>
+                  {fieldGps && fieldGps.active ? '🛰️ GPS Synced' : '🛰️ Locating'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--muted)' }}>Latitude:</span>
+                  <b style={{ fontFamily: 'monospace' }}>{fieldGps?.latitude ? fieldGps.latitude.toFixed(6) : 'Acquiring...'}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--muted)' }}>Longitude:</span>
+                  <b style={{ fontFamily: 'monospace' }}>{fieldGps?.longitude ? fieldGps.longitude.toFixed(6) : 'Acquiring...'}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--muted)' }}>Vehicle Speed:</span>
+                  <b style={{ color: '#2563EB' }}>{fieldGps?.speed_kmh ?? 0} km/h</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--muted)' }}>GPS Accuracy:</span>
+                  <b>{fieldGps?.accuracy_m ? `±${fieldGps.accuracy_m} meters` : 'High Precision'}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--muted)' }}>Vehicle Unit:</span>
+                  <b>{fieldGps?.vehicle_id || 'MH-17-AG-501 (Ghanta Gadi)'}</b>
+                </div>
+              </div>
+              {fieldGps && fieldGps.active && (
+                <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border, #cbd5e1)' }}>
+                  <a
+                    href={`https://www.google.com/maps?q=${fieldGps.latitude},${fieldGps.longitude}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: 'block',
+                      textAlign: 'center',
+                      padding: '7px 12px',
+                      borderRadius: '8px',
+                      background: '#10B981',
+                      color: '#fff',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    📍 Open Exact GPS on Google Maps
+                  </a>
+                </div>
+              )}
+            </Card>
+          )}
 
           <Card className="recent-log-card">
             <SectionHead title="Recent detections" detail="Real-time incident log" />

@@ -558,7 +558,18 @@ latest_field_data = {
     "display_bytes": None,
     "timestamp": 0,
     "predictions": [],
-    "new_frame_event": threading.Event()
+    "new_frame_event": threading.Event(),
+    "gps": {
+        "latitude": 18.5204,
+        "longitude": 73.8567,
+        "speed_kmh": 0.0,
+        "accuracy_m": 0.0,
+        "heading": 0.0,
+        "city": "Ahilyanagar",
+        "vehicle_id": "MH-17-AG-501 (Ghanta Gadi)",
+        "active": False,
+        "last_update": 0
+    }
 }
 
 def draw_ai_detections_on_frame(frame, preds):
@@ -625,6 +636,27 @@ def draw_ai_detections_on_frame(frame, preds):
         cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), box_color, -1)
         cv2.putText(frame, tag, (x1 + int(6 * scale), tag_y2 - int(4 * scale)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thick, cv2.LINE_AA)
 
+    # 4. Render Live Mobile GPS Dashcam Telemetry (Bottom Left HUD)
+    gps = latest_field_data.get("gps", {})
+    if gps.get("active") and (time.time() - gps.get("last_update", 0)) < 15.0:
+        lat = gps.get("latitude", 0.0)
+        lng = gps.get("longitude", 0.0)
+        spd = gps.get("speed_kmh", 0.0)
+        veh = gps.get("vehicle_id", "Municipal Unit")
+        hud_text = f"GPS: {lat:.5f}N, {lng:.5f}E | {spd:.0f} km/h | {veh}"
+
+        hud_font_scale = 0.44 * scale
+        hud_font_thick = max(1, int(1.4 * scale))
+        (htw, hth), _ = cv2.getTextSize(hud_text, cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, hud_font_thick)
+
+        hud_x = int(14 * scale)
+        hud_y = fh - int(14 * scale)
+
+        # Translucent glassmorphic pill background
+        cv2.rectangle(frame, (hud_x - 6, hud_y - hth - 6), (hud_x + htw + 8, hud_y + 6), (15, 23, 42), -1)
+        cv2.rectangle(frame, (hud_x - 6, hud_y - hth - 6), (hud_x + htw + 8, hud_y + 6), (16, 185, 129), 1)
+        cv2.putText(frame, hud_text, (hud_x, hud_y), cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, (240, 253, 244), hud_font_thick, cv2.LINE_AA)
+
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
     while True:
@@ -648,21 +680,35 @@ def field_ai_worker():
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Auto persist detected garbage to XAMPP MySQL
+            # Auto persist detected garbage to XAMPP MySQL with live mobile GPS
             if res.get("is_garbage") and len(preds) > 0:
                 try:
                     top = preds[0]
+                    gps = latest_field_data.get("gps", {})
+                    has_gps = gps.get("active", False) and (time.time() - gps.get("last_update", 0)) < 15.0
+                    lat = gps.get("latitude", 18.5204) if has_gps else 18.5204
+                    lng = gps.get("longitude", 73.8567) if has_gps else 73.8567
+                    spd = gps.get("speed_kmh", 0.0) if has_gps else 0.0
+                    v_city = gps.get("city", "Ahilyanagar")
+                    v_id = gps.get("vehicle_id", "MH-17-AG-501 (Ghanta Gadi)")
+
+                    loc_name = f"Mobile GPS ({lat:.5f}, {lng:.5f})" if has_gps else "Cloudflare Mobile Field Unit"
+                    notes_txt = f"Live mobile detection via {v_id} at {spd:.0f} km/h (GPS ±{gps.get('accuracy_m', 0)}m). Waste: {', '.join([p['label'] for p in preds[:3]])}"
+
                     database.add_detection_record({
-                        "location_name": "Cloudflare Mobile Field Unit",
-                        "city": "Ahilyanagar",
+                        "location_name": loc_name,
+                        "city": v_city,
+                        "latitude": lat,
+                        "longitude": lng,
+                        "assigned_vehicle": v_id,
                         "waste_type": top.get("type", "Plastic"),
                         "confidence": top.get("confidence", 92.0),
                         "severity": top.get("priority", "Medium"),
                         "status": "Pending",
-                        "notes": f"Live mobile detection: {', '.join([p['label'] for p in preds[:3]])}"
+                        "notes": notes_txt
                     })
-                except Exception:
-                    pass
+                except Exception as ex:
+                    print(f"Notice: Failed to auto-persist detection with GPS: {ex}")
         except Exception:
             time.sleep(0.04)
 
@@ -671,12 +717,16 @@ ai_worker_thread.start()
 
 @app.route('/api/field_status', methods=['GET'])
 def get_field_status():
-    """Returns live detection statistics for the active mobile field streamer."""
+    """Returns live detection statistics and mobile GPS telemetry for the active mobile field streamer."""
     try:
         preds = latest_field_data.get("predictions", [])
         total = len(preds)
         avg_c = round(sum([float(p.get('confidence', 90)) for p in preds]) / total, 1) if total > 0 else 94.0
         is_active = (time.time() - latest_field_data.get("timestamp", 0)) < 6.0
+        
+        gps_data = latest_field_data.get("gps", {})
+        gps_active = (time.time() - gps_data.get("last_update", 0)) < 15.0 and gps_data.get("active", False)
+
         return jsonify({
             "status": "success",
             "active": is_active,
@@ -684,7 +734,11 @@ def get_field_status():
             "predictions": preds,
             "avg_confidence": avg_c,
             "fps": 24 if is_active else 0,
-            "timestamp": latest_field_data.get("timestamp", 0)
+            "timestamp": latest_field_data.get("timestamp", 0),
+            "gps": {
+                **gps_data,
+                "active": gps_active
+            }
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -694,7 +748,7 @@ def upload_frame():
     """
     Ultra-high-speed binary frame intake.
     Receives raw JPEG byte buffer in <2ms, bypassing all JSON/Base64 overhead.
-    Fast overlay pipeline (<3.5ms): Instantly applies current AI detections to the display buffer.
+    Fast overlay pipeline (<3.5ms): Instantly applies current AI detections and mobile GPS HUD.
     Reuses persistent TCP keep-alive connection to prevent socket exhaustion.
     """
     try:
@@ -702,16 +756,46 @@ def upload_frame():
         if not data or len(data) < 100:
             return jsonify({"status": "error", "message": "Empty frame"}), 400
 
+        # Ingest live GPS telemetry from mobile HTTP headers
+        x_lat = request.headers.get('X-GPS-Lat')
+        x_lng = request.headers.get('X-GPS-Lng')
+        if x_lat is not None and x_lng is not None:
+            try:
+                lat = float(x_lat)
+                lng = float(x_lng)
+                spd = float(request.headers.get('X-GPS-Speed', 0.0))
+                acc = float(request.headers.get('X-GPS-Accuracy', 0.0))
+                head = float(request.headers.get('X-GPS-Heading', 0.0))
+                v_city = request.headers.get('X-City', 'Ahilyanagar')
+                v_id = request.headers.get('X-Vehicle-ID', 'MH-17-AG-501 (Ghanta Gadi)')
+
+                latest_field_data["gps"] = {
+                    "latitude": lat,
+                    "longitude": lng,
+                    "speed_kmh": round(spd, 1),
+                    "accuracy_m": round(acc, 1),
+                    "heading": round(head, 1),
+                    "city": v_city,
+                    "vehicle_id": v_id,
+                    "active": True,
+                    "last_update": time.time()
+                }
+            except (ValueError, TypeError):
+                pass
+
         latest_field_data["raw_bytes"] = data
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
 
         # Decoupled zero-loss overlay pipeline (<3ms): 
-        # When clean (no waste): pass through raw mobile camera frame with 100% bit-for-bit clarity!
-        # When waste detected: overlay targeting brackets and label tags at 90% crisp JPEG quality.
+        # When waste detected or GPS HUD active: overlay targeting brackets and GPS HUD at 90% crisp JPEG quality.
+        # Otherwise: 100% bit-for-bit lossless pass-through of raw phone camera feed.
         try:
             cached_preds = latest_field_data.get("predictions", [])
-            if cached_preds and len(cached_preds) > 0:
+            gps_info = latest_field_data.get("gps", {})
+            has_gps = gps_info.get("active", False) and (time.time() - gps_info.get("last_update", 0)) < 15.0
+
+            if (cached_preds and len(cached_preds) > 0) or has_gps:
                 nparr = np.frombuffer(data, np.uint8)
                 frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 if frame is not None:
