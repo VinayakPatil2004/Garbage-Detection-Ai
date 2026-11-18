@@ -855,7 +855,17 @@ def field_ai_worker():
 
             # Auto persist detected garbage to XAMPP MySQL only when real high-confidence waste is localized
             valid_waste = [p for p in preds if p.get('confidence', 0) >= 55.0]
-            if res.get("is_garbage") and len(valid_waste) > 0:
+
+            # Municipal Volume & Dump Filter:
+            # We don't dispatch municipal units or flood the dashboard for 1 isolated tiny bottle or bag.
+            # Snapshots trigger ONLY for:
+            # 1) Roadside Open Garbage Dump (कचऱ्याचा ढीग) via Signal 3.5
+            # 2) Substantial waste pile or multi-item cluster (total bounding box area >= 6% or >= 3 items)
+            is_road_dump = any(p.get('class_name') == 'garbage_dump' for p in valid_waste)
+            total_waste_area = sum([(p.get('box', {}).get('width', 0) * p.get('box', {}).get('height', 0)) / 100.0 for p in valid_waste])
+            is_substantial_pile = total_waste_area >= 6.0 or len(valid_waste) >= 3
+
+            if res.get("is_garbage") and (is_road_dump or is_substantial_pile):
                 now_t = time.time()
                 # Debounce: Capture snapshot at most once every 3.5 seconds
                 if (now_t - last_snapshot_time) > 3.5:
