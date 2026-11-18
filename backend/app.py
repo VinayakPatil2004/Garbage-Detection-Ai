@@ -586,25 +586,6 @@ def draw_ai_detections_on_frame(frame, preds):
         cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), box_color, -1)
         cv2.putText(frame, tag, (x1 + int(6 * scale), tag_y2 - int(4 * scale)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thick, cv2.LINE_AA)
 
-    # 4. Status HUD in top-left (Dynamically proportioned to frame resolution)
-    preds_cnt = len(preds)
-    if preds_cnt > 0:
-        hud_txt = f"AI DETECTED: {preds_cnt} Waste Object(s)"
-        hud_bg = (20, 20, 180) # Red
-        hud_border = (0, 0, 255)
-    else:
-        hud_txt = "AI SCANNING: Clean Area"
-        hud_bg = (20, 60, 20) # Green
-        hud_border = (0, 220, 0)
-
-    hud_font_scale = 0.50 * scale
-    hud_font_thick = max(1, int(1.6 * scale))
-    (htw, hth), _ = cv2.getTextSize(hud_txt, cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, hud_font_thick)
-    hud_w = min(fw - 20, htw + int(24 * scale))
-    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + int(16 * scale)), hud_bg, -1)
-    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + int(16 * scale)), hud_border, max(1, int(1.5 * scale)))
-    cv2.putText(frame, hud_txt, (18, 10 + hth + int(8 * scale)), cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, (255, 255, 255), hud_font_thick, cv2.LINE_AA)
-
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
     while True:
@@ -686,17 +667,22 @@ def upload_frame():
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
 
-        # Decoupled ultra-fast overlay (3.3ms) for 30 FPS stream display
+        # Decoupled zero-loss overlay pipeline (<3ms): 
+        # When clean (no waste): pass through raw mobile camera frame with 100% bit-for-bit clarity!
+        # When waste detected: overlay targeting brackets and label tags at 90% crisp JPEG quality.
         try:
             cached_preds = latest_field_data.get("predictions", [])
-            nparr = np.frombuffer(data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if frame is not None:
-                draw_ai_detections_on_frame(frame, cached_preds)
-                # High-fidelity 88% JPEG with optimization flag
-                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 88, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
-                latest_field_data["display_bytes"] = buf.tobytes()
+            if cached_preds and len(cached_preds) > 0:
+                nparr = np.frombuffer(data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    draw_ai_detections_on_frame(frame, cached_preds)
+                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
+                    latest_field_data["display_bytes"] = buf.tobytes()
+                else:
+                    latest_field_data["display_bytes"] = data
             else:
+                # 100% bit-for-bit lossless pass-through of raw phone camera feed
                 latest_field_data["display_bytes"] = data
         except Exception:
             latest_field_data["display_bytes"] = data

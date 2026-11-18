@@ -20,6 +20,7 @@ export default function LiveCamera() {
   const [running, setRunning] = useState(true);
   const [captured, setCaptured] = useState(false);
   const [selectedCam, setSelectedCam] = useState("webcam");
+  const [aspectMode, setAspectMode] = useState("16/9"); // "16/9", "9/16", "theater"
   const [viewMode, setViewMode] = useState("contain"); // 'contain' (fit entire frame) or 'cover' (fill screen edge-to-edge)
   const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.35:8080/video");
   const [activeMobileUrl, setActiveMobileUrl] = useState("http://192.168.1.35:8080/video");
@@ -340,9 +341,25 @@ export default function LiveCamera() {
         </Card>
       )}
 
-      <div className="camera-layout">
+      <div className={aspectMode === "theater" ? "camera-theater-wrap" : "camera-grid"} style={aspectMode === "theater" ? { display: 'flex', flexDirection: 'column', gap: '16px' } : {}}>
         <Card className="camera-card">
-          <div className="camera-feed" style={{ position: 'relative', minHeight: '480px', background: '#0F172A', overflow: 'hidden' }}>
+          <div
+            className="camera-feed"
+            style={{
+              position: 'relative',
+              width: '100%',
+              maxWidth: aspectMode === '9/16' ? '440px' : '100%',
+              aspectRatio: aspectMode === '9/16' ? '9 / 16' : '16 / 9',
+              margin: aspectMode === '9/16' ? '0 auto' : '0',
+              maxHeight: aspectMode === '9/16' ? '700px' : '640px',
+              background: '#0B0F19',
+              overflow: 'hidden',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
 
             {/* Cloudflare Remote Mobile Broadcast Feed */}
             {selectedCam === "mobile-broadcast" && (
@@ -352,11 +369,10 @@ export default function LiveCamera() {
                 style={{
                   width: '100%',
                   height: '100%',
-                  objectFit: viewMode,
+                  objectFit: 'contain',
                   position: 'absolute',
                   inset: 0,
-                  background: '#000',
-                  transition: 'object-fit 0.25s ease'
+                  background: '#000'
                 }}
               />
             )}
@@ -420,14 +436,35 @@ export default function LiveCamera() {
             {/* Hidden canvas for extracting frames */}
             <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-            {/* Camera Overlay HUD */}
-            <div className="camera-overlay" style={{ zIndex: 10 }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Video size={14} /> {CAMERAS.find(c => c.id === selectedCam)?.label || selectedCam}
-              </span>
-              <span>
-                <span className="rec-dot" style={{ background: running ? '#EF4444' : '#94A3B8' }} /> {running ? "LIVE · 1080p" : "PAUSED"}
-              </span>
+            {/* Camera Overlay HUD (Non-overlapping glassmorphic pills) */}
+            <div className="camera-overlay" style={{ zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(8px)', padding: '5px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 600 }}>
+                  <Video size={14} color="#3B82F6" /> {CAMERAS.find(c => c.id === selectedCam)?.label || selectedCam}
+                </span>
+                {selectedCam === "mobile-broadcast" && (
+                  <span style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    background: liveStats.count > 0 ? 'rgba(239, 68, 68, 0.92)' : 'rgba(16, 185, 129, 0.92)',
+                    backdropFilter: 'blur(8px)',
+                    padding: '5px 12px',
+                    borderRadius: '20px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#fff',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                  }}>
+                    {liveStats.count > 0 ? `🚨 ${liveStats.count} Waste Object(s) Detected` : `✅ AI Scanning: Clean Area`}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(8px)', padding: '5px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 700 }}>
+                  <span className="rec-dot" style={{ background: running ? '#EF4444' : '#94A3B8' }} /> {running ? "LIVE · 1080p HD" : "PAUSED"}
+                </span>
+              </div>
             </div>
 
             {/* Live Bounding Boxes from AI Detection */}
@@ -458,22 +495,68 @@ export default function LiveCamera() {
           </div>
 
           <div className="camera-controls">
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               <Button kind={running ? "danger" : "primary"} onClick={() => setRunning(!running)}>
                 {running ? <><Square size={15} /> Stop detection</> : <><Play size={15} /> Start detection</>}
               </Button>
               <Button kind="secondary" onClick={handleCapture}>
                 {captured ? <><Check size={17} /> Captured</> : <><Camera size={17} /> Capture frame</>}
               </Button>
-              {selectedCam === "mobile-broadcast" && (
-                <Button
-                  kind="secondary"
-                  onClick={() => setViewMode(prev => prev === 'contain' ? 'cover' : 'contain')}
-                  title={viewMode === 'contain' ? "Expand video to fill screen (removes black bars)" : "Fit entire video inside window"}
+
+              {/* View Aspect Ratio Selectors */}
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center', background: 'var(--surface-2, #f1f5f9)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border, #cbd5e1)' }}>
+                <button
+                  type="button"
+                  onClick={() => setAspectMode("16/9")}
+                  title="Widescreen 16:9 Fit (Standard for horizontal camera and dashcams)"
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: aspectMode === '16/9' ? 'var(--primary, #3b82f6)' : 'transparent',
+                    color: aspectMode === '16/9' ? '#fff' : 'var(--muted, #64748b)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
                 >
-                  {viewMode === 'contain' ? <><Maximize2 size={15} /> Fill Screen (Edge-to-Edge)</> : <><Minimize2 size={15} /> Fit to Window</>}
-                </Button>
-              )}
+                  🖥️ 16:9 Widescreen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAspectMode("9/16")}
+                  title="Portrait 9:16 Frame (For vertically held smartphones)"
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: aspectMode === '9/16' ? 'var(--primary, #3b82f6)' : 'transparent',
+                    color: aspectMode === '9/16' ? '#fff' : 'var(--muted, #64748b)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  📱 9:16 Portrait
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAspectMode(prev => prev === "theater" ? "16/9" : "theater")}
+                  title="Expand to Full Width (Theater Mode)"
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    background: aspectMode === 'theater' ? 'var(--primary, #3b82f6)' : 'transparent',
+                    color: aspectMode === 'theater' ? '#fff' : 'var(--muted, #64748b)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  🎬 Theater
+                </button>
+              </div>
             </div>
 
             {/* Camera Switcher Dropdown */}

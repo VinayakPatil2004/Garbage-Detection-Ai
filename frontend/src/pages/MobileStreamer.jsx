@@ -141,14 +141,14 @@ export default function MobileStreamer() {
       }
 
       // Dynamic quality & resolution tiers:
-      // High mode (1080p · Ultra Sharp): maxDim = 1080, quality = 0.85
-      // Balanced mode (720p HD): maxDim = 840, quality = 0.80
-      // Fast mode (540p Speed): maxDim = 600, quality = 0.70
+      // High mode (720p / 1080p HD · Ultra Sharp): maxDim = 1280, quality = 0.88
+      // Balanced mode (Fast HD): maxDim = 960, quality = 0.80
+      // Fast mode (Low Latency): maxDim = 640, quality = 0.70
       const cfg = {
-        high: { maxDim: 1080, quality: 0.85 },
-        balanced: { maxDim: 840, quality: 0.80 },
-        fast: { maxDim: 600, quality: 0.70 }
-      }[qualityMode] || { maxDim: 1080, quality: 0.85 };
+        high: { maxDim: 1280, quality: 0.88 },
+        balanced: { maxDim: 960, quality: 0.80 },
+        fast: { maxDim: 640, quality: 0.70 }
+      }[qualityMode] || { maxDim: 1280, quality: 0.88 };
 
       const scale = Math.min(1.0, cfg.maxDim / Math.max(vw, vh));
       const targetW = Math.round(vw * scale);
@@ -161,6 +161,8 @@ export default function MobileStreamer() {
       }
 
       const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(video, 0, 0, targetW, targetH);
 
       canvas.toBlob(async (blob) => {
