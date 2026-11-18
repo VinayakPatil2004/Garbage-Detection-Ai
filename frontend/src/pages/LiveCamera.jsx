@@ -489,6 +489,42 @@ export default function LiveCamera() {
               </div>
             ))}
 
+            {/* Active AI Radar Scanning Indicator */}
+            {running && selectedCam === "mobile-broadcast" && (
+              <div style={{
+                position: 'absolute',
+                bottom: '18px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                background: liveStats.count > 0 ? 'rgba(239, 68, 68, 0.92)' : 'rgba(15, 23, 42, 0.85)',
+                backdropFilter: 'blur(8px)',
+                border: liveStats.count > 0 ? '1px solid #EF4444' : '1px solid rgba(16, 185, 129, 0.4)',
+                borderRadius: '20px',
+                padding: '6px 16px',
+                color: liveStats.count > 0 ? '#fff' : '#6EE7B7',
+                fontSize: '11px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                zIndex: 10,
+                boxShadow: liveStats.count > 0 ? '0 4px 16px rgba(239, 68, 68, 0.4)' : '0 2px 10px rgba(0,0,0,0.3)',
+                pointerEvents: 'none'
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  background: liveStats.count > 0 ? '#fff' : '#10B981',
+                  boxShadow: liveStats.count > 0 ? '0 0 10px #fff' : '0 0 8px #10B981',
+                  display: 'inline-block'
+                }} />
+                {liveStats.count > 0 
+                  ? `🚨 AI LOCALIZED: ${liveStats.count} Waste Object(s) in Frame!` 
+                  : "🟢 YOLOv8 Edge AI Active · Scanning Clean Area (No Litter)"}
+              </div>
+            )}
+
             <div className="camera-time" style={{ zIndex: 10 }}>
               {new Date().toLocaleTimeString()}
             </div>
@@ -629,6 +665,25 @@ export default function LiveCamera() {
                   <div className="log-badge">{item.conf}%</div>
                 </div>
               ))}
+            </div>
+          </Card>
+
+          {/* Real-time AI Testing & Verification Guide Card */}
+          <Card style={{ padding: '16px 18px', background: 'rgba(59, 130, 246, 0.04)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#2563EB', fontWeight: 700, fontSize: '13px', marginBottom: '8px' }}>
+              <Zap size={16} /> मॉडेल टेस्टिंग गाईड (How AI Detects)
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--ink)', lineHeight: '1.6' }}>
+              सध्या कॅमेऱ्यासमोर <b>कॉम्प्युटर टेबल, कीबोर्ड व मॉनिटर</b> आहे. हा कचरा नसल्यामुळे AI योग्यरीत्या <b>"Clean Area (0 items)"</b> दाखवत आहे.
+            </div>
+            <div style={{ marginTop: '10px', padding: '10px 12px', background: 'var(--surface, #fff)', borderRadius: '8px', border: '1px solid var(--border, #cbd5e1)', fontSize: '12px' }}>
+              <b style={{ color: '#0F172A' }}>💡 चाचणी कशी करायची?</b>
+              <div style={{ color: 'var(--muted)', marginTop: '4px' }}>
+                कॅमेरासमोर <b>पाण्याची रिकामी बाटली (Bottle)</b>, <b>चुरगळलेला कागद (Paper)</b>, <b>खाऊचे रॅपर (Plastic)</b> किंवा <b>खोका (Cardboard)</b> धरून पहा.
+              </div>
+              <div style={{ color: '#10B981', fontWeight: 700, marginTop: '6px' }}>
+                👉 AI लगेच त्यावर लाल/पिवळा टार्गेट बॉक्स दाखवेल आणि MySQL मध्ये सेव्ह करेल!
+              </div>
             </div>
           </Card>
         </div>
