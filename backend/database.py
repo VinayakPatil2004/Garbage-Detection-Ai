@@ -174,7 +174,10 @@ def init_db():
             if db_type == "sqlite":
                 conn.commit()
 
-        print(f"✅ Database initialized successfully on {db_type.upper()} (XAMPP: garbage_detection_db)!")
+        if db_type == "mysql":
+            print("✅ Database Connected: XAMPP MySQL (localhost:3306 -> garbage_detection_db)!")
+        else:
+            print("ℹ️ Database Connected: Local SQLite fallback (backend/garbage_history.db). Start MySQL in XAMPP Control Panel for phpMyAdmin.")
     finally:
         cursor.close()
         conn.close()
