@@ -291,20 +291,22 @@ def analyze_image_unified(img, conf_thresh=0.38):
     adapted_np, blur_score, is_lighting_enhanced, mean_brightness = adapt_road_environmental_lighting(img_np)
     inference_img = Image.fromarray(adapted_np) if is_lighting_enhanced else img
 
-    # --- Signal 1: Context & Indoor Suppression Check (conf=0.18 for early detection) ---
+    # --- Signal 1: Context & Indoor Suppression Check (imgsz=512 for ultra-fast 20ms inference) ---
     indoor_objects_detected = []
     person_boxes = []
     has_truck = False
     truck_box = None
+    coco_candidate_boxes = []
 
     if detector_model is not None:
         try:
-            ctx_res = detector_model(inference_img, conf=0.18, imgsz=640, device=device, verbose=False)
+            ctx_res = detector_model(inference_img, conf=0.18, imgsz=512, device=device, verbose=False)
             if ctx_res and len(ctx_res) > 0 and getattr(ctx_res[0], 'boxes', None) is not None:
                 for b in ctx_res[0].boxes:
                     cls_id = int(b.cls[0].item())
                     cls_name = detector_model.names.get(cls_id, "").lower()
                     x1, y1, x2, y2 = b.xyxy[0].tolist()
+                    conf = round(float(b.conf[0].item()) * 100, 1)
 
                     if cls_name in INDOOR_CLEAN_CLASSES:
                         indoor_objects_detected.append(cls_name)
@@ -320,6 +322,10 @@ def analyze_image_unified(img, conf_thresh=0.38):
                             "width": round(((x2 - x1) / img_width) * 100, 2),
                             "height": round(((y2 - y1) / img_height) * 100, 2)
                         }
+
+                    # Cache for Signal 3 (avoids running duplicate model)
+                    if conf >= (conf_thresh * 100) and cls_name in WASTE_METADATA and cls_name not in {'plastic', 'cardboard', 'metal', 'paper', 'biological', 'other'}:
+                        coco_candidate_boxes.append((cls_name, conf, x1, y1, x2, y2))
         except Exception as e:
             print(f"Context detection error: {e}")
 
@@ -356,19 +362,19 @@ def analyze_image_unified(img, conf_thresh=0.38):
                 "mean_brightness": round(mean_brightness, 1),
                 "blur_score": round(blur_score, 1),
                 "motion_blur_detected": blur_score < 40.0,
-                "resolution_mode": "640px (Small Object Enhanced)",
+                "resolution_mode": "512px (Ultra-Fast Road Mode)",
                 "environment": f"Indoor / Office Protected ({indoor_summary})"
             }
         }
 
-    # --- Signal 2: True Specialized Waste Detection (garbage_detector_best.pt) ---
+    # --- Signal 2: True Specialized Waste Detection (garbage_detector_best.pt at 512px) ---
     predictions = []
     detected_types = set()
     pred_id = 1
 
     if waste_detector_model is not None:
         try:
-            waste_res = waste_detector_model(inference_img, conf=conf_thresh, imgsz=640, device=device, verbose=False)
+            waste_res = waste_detector_model(inference_img, conf=conf_thresh, imgsz=512, device=device, verbose=False)
             if waste_res and len(waste_res) > 0 and getattr(waste_res[0], 'boxes', None) is not None:
                 for b in waste_res[0].boxes:
                     cls_id = int(b.cls[0].item())
@@ -416,46 +422,34 @@ def analyze_image_unified(img, conf_thresh=0.38):
         except Exception as e:
             print(f"Waste detector error: {e}")
 
-    # --- Signal 3: Secondary COCO Waste Items (bottles, cups, food scraps) ---
-    if detector_model is not None:
-        try:
-            det_res = detector_model(inference_img, conf=conf_thresh, imgsz=640, device=device, verbose=False)
-            if det_res and len(det_res) > 0 and getattr(det_res[0], 'boxes', None) is not None:
-                for b in det_res[0].boxes:
-                    cls_id = int(b.cls[0].item())
-                    cls_name = detector_model.names.get(cls_id, "").lower()
-                    conf = round(float(b.conf[0].item()) * 100, 1)
-                    x1, y1, x2, y2 = b.xyxy[0].tolist()
+    # --- Signal 3: Secondary COCO Waste Items (reusing cached single-pass detector output) ---
+    for cls_name, conf, x1, y1, x2, y2 in coco_candidate_boxes:
+        left_pct = round((x1 / img_width) * 100, 2)
+        top_pct = round((y1 / img_height) * 100, 2)
+        width_pct = round(((x2 - x1) / img_width) * 100, 2)
+        height_pct = round(((y2 - y1) / img_height) * 100, 2)
 
-                    left_pct = round((x1 / img_width) * 100, 2)
-                    top_pct = round((y1 / img_height) * 100, 2)
-                    width_pct = round(((x2 - x1) / img_width) * 100, 2)
-                    height_pct = round(((y2 - y1) / img_height) * 100, 2)
+        if top_pct < 10.0 and height_pct < 12.0:
+            continue
 
-                    if cls_name in WASTE_METADATA and cls_name not in {'plastic', 'cardboard', 'metal', 'paper', 'biological', 'other'}:
-                        if top_pct < 10.0 and height_pct < 12.0:
-                            continue
-
-                        meta = WASTE_METADATA[cls_name]
-                        predictions.append({
-                            "id": pred_id,
-                            "label": meta['label'],
-                            "category": meta['category'],
-                            "confidence": conf,
-                            "priority": meta['priority'],
-                            "type": meta.get('type', 'General'),
-                            "class_name": cls_name,
-                            "box": {
-                                "x": left_pct,
-                                "y": top_pct,
-                                "width": width_pct,
-                                "height": height_pct
-                            }
-                        })
-                        detected_types.add(meta.get('type', 'General'))
-                        pred_id += 1
-        except Exception as e:
-            print(f"COCO waste detector error: {e}")
+        meta = WASTE_METADATA[cls_name]
+        predictions.append({
+            "id": pred_id,
+            "label": meta['label'],
+            "category": meta['category'],
+            "confidence": conf,
+            "priority": meta['priority'],
+            "type": meta.get('type', 'General'),
+            "class_name": cls_name,
+            "box": {
+                "x": left_pct,
+                "y": top_pct,
+                "width": width_pct,
+                "height": height_pct
+            }
+        })
+        detected_types.add(meta.get('type', 'General'))
+        pred_id += 1
 
     # --- Signal 4: Classifier Scene Verification (garbage_best.pt at 256px) ---
     clean_prob = 1.0
