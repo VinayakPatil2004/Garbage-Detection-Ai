@@ -99,66 +99,88 @@ export default function MobileStreamer() {
     return () => clearInterval(fpsTimerRef.current);
   }, []);
 
-  // Frame streaming loop: runs at high frequency (~15-20 FPS)
+  // Self-pacing sequential streaming loop (Prevents socket exhaustion and guarantees butter-smooth streaming)
+  const streamActiveRef = useRef(false);
+
   useEffect(() => {
-    if (!streaming) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
+    streamActiveRef.current = streaming;
+    if (streaming) {
+      runStreamLoop();
     }
-
-    timerRef.current = setInterval(() => {
-      captureAndSend();
-    }, 60); // 60ms interval = up to 16 FPS
-
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      streamActiveRef.current = false;
     };
   }, [streaming]);
 
-  const captureAndSend = () => {
-    if (isSendingRef.current) return;
-    if (!videoRef.current || videoRef.current.readyState < 2) return;
-    if (!canvasRef.current) return;
+  const runStreamLoop = async () => {
+    while (streamActiveRef.current) {
+      const startTime = performance.now();
+      await sendSingleFrame();
+      const elapsed = performance.now() - startTime;
+      // Target ~22 FPS (45ms per frame budget)
+      const delay = Math.max(12, 45 - elapsed);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  };
 
-    const canvas = canvasRef.current;
-    // Send high-speed optimized 540x360 frame
-    canvas.width = 540;
-    canvas.height = 360;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-
-    isSendingRef.current = true;
-    canvas.toBlob(async (blob) => {
-      if (!blob) {
-        isSendingRef.current = false;
-        return;
+  const sendSingleFrame = () => {
+    return new Promise((resolve) => {
+      if (!videoRef.current || videoRef.current.readyState < 2 || !canvasRef.current) {
+        return resolve();
       }
 
-      try {
-        const res = await fetch("/api/upload_frame", {
-          method: "POST",
-          headers: { "Content-Type": "image/jpeg" },
-          body: blob
-        });
+      const video = videoRef.current;
+      const vw = video.videoWidth || 720;
+      const vh = video.videoHeight || 1280;
 
-        if (res.ok) {
-          framesCountRef.current += 1;
-          setBytesSent(prev => prev + blob.size);
-          const data = await res.json();
-          if (data.predictions && data.predictions.length > 0) {
-            setLastDetection({
-              time: new Date().toLocaleTimeString(),
-              count: data.predictions.length,
-              labels: data.predictions.map(p => p.label).join(", ")
-            });
+      // Preserve EXACT native aspect ratio of camera (Portrait or Landscape)
+      // Scale so largest dimension is 720px for crisp HD clarity and fast upload
+      const maxDim = 720;
+      const scale = Math.min(1.0, maxDim / Math.max(vw, vh));
+      const targetW = Math.round(vw * scale);
+      const targetH = Math.round(vh * scale);
+
+      const canvas = canvasRef.current;
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, targetW, targetH);
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) return resolve();
+
+        try {
+          const res = await fetch("/api/upload_frame", {
+            method: "POST",
+            headers: { 
+              "Content-Type": "image/jpeg",
+              "Connection": "keep-alive"
+            },
+            body: blob
+          });
+
+          if (res.ok) {
+            framesCountRef.current += 1;
+            setBytesSent(prev => prev + blob.size);
+            const data = await res.json();
+            if (data.predictions && data.predictions.length > 0) {
+              setLastDetection({
+                time: new Date().toLocaleTimeString(),
+                count: data.predictions.length,
+                labels: data.predictions.map(p => p.label).join(", ")
+              });
+            }
           }
+        } catch (err) {
+          // network fluctuation
+        } finally {
+          resolve();
         }
-      } catch (err) {
-        // network fluctuation
-      } finally {
-        isSendingRef.current = false;
-      }
-    }, 'image/jpeg', 0.52);
+      }, 'image/jpeg', 0.65);
+    });
   };
 
   return (
@@ -277,6 +299,29 @@ export default function MobileStreamer() {
           }}>
             POINT AT ROAD / LITTER
           </div>
+        </div>
+
+        {/* Orientation Hint */}
+        <div style={{
+          position: 'absolute',
+          bottom: '105px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'rgba(15, 23, 42, 0.75)',
+          backdropFilter: 'blur(6px)',
+          borderRadius: '20px',
+          padding: '5px 12px',
+          fontSize: '11px',
+          color: '#CBD5E1',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          pointerEvents: 'none',
+          zIndex: 15,
+          whiteSpace: 'nowrap',
+          border: '1px solid rgba(255,255,255,0.1)'
+        }}>
+          <span>🔄 Rotate phone sideways for full widescreen</span>
         </div>
 
         {/* Recent Detection Notification Banner on Mobile */}

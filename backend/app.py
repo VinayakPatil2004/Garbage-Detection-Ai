@@ -579,20 +579,22 @@ def draw_ai_detections_on_frame(frame, preds):
         cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), box_color, -1)
         cv2.putText(frame, tag, (x1 + 5, tag_y2 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # 4. Status HUD in top-left
+    # 4. Status HUD in top-left (Dynamically proportioned to frame resolution)
     preds_cnt = len(preds)
     if preds_cnt > 0:
-        hud_txt = f"AI DETECTED: {preds_cnt} Waste Object(s)"
+        hud_txt = f"🚨 AI DETECTED: {preds_cnt} Waste Object(s)"
         hud_bg = (20, 20, 180) # Red
         hud_border = (0, 0, 255)
     else:
-        hud_txt = "AI SCANNING: Clean Area"
+        hud_txt = "✅ AI SCANNING: Clean Area"
         hud_bg = (20, 60, 20) # Green
         hud_border = (0, 220, 0)
 
-    cv2.rectangle(frame, (8, 8), (340, 38), hud_bg, -1)
-    cv2.rectangle(frame, (8, 8), (340, 38), hud_border, 1)
-    cv2.putText(frame, hud_txt, (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 2, cv2.LINE_AA)
+    (htw, hth), _ = cv2.getTextSize(hud_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 2)
+    hud_w = min(fw - 20, htw + 20)
+    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + 14), hud_bg, -1)
+    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + 14), hud_border, 1)
+    cv2.putText(frame, hud_txt, (18, 10 + hth + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2, cv2.LINE_AA)
 
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
@@ -669,6 +671,7 @@ def upload_frame():
     """
     Ultra-high-speed binary frame intake.
     Receives raw JPEG byte buffer in <2ms, bypassing all JSON/Base64 overhead.
+    Reuses persistent TCP keep-alive connection to prevent socket exhaustion.
     """
     try:
         data = request.data
@@ -679,10 +682,13 @@ def upload_frame():
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
 
-        return jsonify({
+        resp = jsonify({
             "status": "success",
             "predictions": latest_field_data.get("predictions", [])
         })
+        resp.headers['Connection'] = 'keep-alive'
+        resp.headers['Keep-Alive'] = 'timeout=30, max=10000'
+        return resp
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -717,18 +723,20 @@ def broadcast_stream():
     Disables proxy buffering with X-Accel-Buffering: no for zero-lag transmission.
     """
     def generate():
+        last_sent_ts = 0
         while True:
-            # Prefer annotated frame with boxes, otherwise serve raw frame directly
             frame_bytes = latest_field_data.get("display_bytes") or latest_field_data.get("raw_bytes")
-            ts = latest_field_data.get("timestamp", 0)
+            curr_ts = latest_field_data.get("timestamp", 0)
 
-            if frame_bytes and (time.time() - ts < 6.0):
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                time.sleep(0.04) # Smooth 25 FPS
+            if frame_bytes and (time.time() - curr_ts < 6.0):
+                if curr_ts != last_sent_ts:
+                    last_sent_ts = curr_ts
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                time.sleep(0.015)
             else:
                 status_frame = make_stream_status_frame(
-                    "WAITING FOR MOBILE FIELD UNIT...",
-                    "Open Cloudflare link on phone -> Select 'Device Webcam'",
+                    "WAITING FOR MOBILE STREAMER...",
+                    "Open Cloudflare link on phone -> Select '/cam'",
                     "Live video from mobile phone will broadcast here in real-time."
                 )
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + status_frame + b'\r\n')
@@ -739,6 +747,7 @@ def broadcast_stream():
     resp.headers['Pragma'] = 'no-cache'
     resp.headers['Expires'] = '0'
     resp.headers['X-Accel-Buffering'] = 'no' # Crucial for Cloudflare Tunnel zero buffering!
+    resp.headers['Connection'] = 'keep-alive'
     return resp
 
 @app.route('/api/detect_ipcam', methods=['POST'])
@@ -1012,4 +1021,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"✨ Garbage Detection Unified API running on http://0.0.0.0:{port}")
     print(f"👉 Health Check: http://localhost:{port}/api/health")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
