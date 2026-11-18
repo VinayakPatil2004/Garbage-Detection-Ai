@@ -454,6 +454,58 @@ def analyze_image_unified(img, conf_thresh=0.38):
         detected_types.add(meta.get('type', 'General'))
         pred_id += 1
 
+    # --- Signal 3.5: Roadside Open Garbage Dump / Waste Heap Engine ---
+    # Specially tailored for Indian roads & highways where waste accumulates as massive continuous heaps/dumps along shoulders.
+    if classifier_model is not None and not has_indoor_context:
+        try:
+            h_start = int(img_height * 0.28)
+            shoulders = [
+                ("Left Roadside Dump", (0, h_start, int(img_width * 0.78), img_height)),
+                ("Right Roadside Dump", (int(img_width * 0.22), h_start, img_width, img_height)),
+                ("Road Center Waste Heap", (int(img_width * 0.10), h_start, int(img_width * 0.90), img_height))
+            ]
+            
+            dump_candidates = []
+            crops = [img.crop(s[1]) for s in shoulders]
+            res_batch = classifier_model(crops, imgsz=256, device=device, verbose=False)
+            
+            for (dump_name, (x1, y1, x2, y2)), r in zip(shoulders, res_batch):
+                if r is not None and getattr(r, 'probs', None) is not None:
+                    probs_list = r.probs.data.tolist()
+                    if len(probs_list) > 1:
+                        p_dump = float(probs_list[1])
+                        if p_dump >= 0.85:
+                            dump_candidates.append((dump_name, p_dump, x1, y1, x2, y2))
+            
+            if dump_candidates:
+                best_name, best_prob, bx1, by1, bx2, by2 = max(dump_candidates, key=lambda x: x[1])
+                conf_pct = round(best_prob * 100, 1)
+                
+                left_pct = round((bx1 / img_width) * 100, 2)
+                top_pct = round((by1 / img_height) * 100, 2)
+                width_pct = round(((bx2 - bx1) / img_width) * 100, 2)
+                height_pct = round(((by2 - by1) / img_height) * 100, 2)
+                
+                predictions.append({
+                    "id": pred_id,
+                    "label": "Roadside Open Garbage Dump (कचऱ्याचा ढीग)",
+                    "category": "Open Municipal Waste Dump",
+                    "confidence": conf_pct,
+                    "priority": "Critical",
+                    "type": "Mixed Waste",
+                    "class_name": "garbage_dump",
+                    "box": {
+                        "x": left_pct,
+                        "y": top_pct,
+                        "width": width_pct,
+                        "height": height_pct
+                    }
+                })
+                detected_types.add("Mixed Waste")
+                pred_id += 1
+        except Exception as e:
+            print(f"Roadside dump detector notice: {e}")
+
     # --- Signal 4: Classifier Scene Verification (garbage_best.pt at 256px) ---
     clean_prob = 1.0
     garb_prob = 0.0
@@ -472,8 +524,9 @@ def analyze_image_unified(img, conf_thresh=0.38):
 
     # --- Dual Confirmation: Scene-level Clean Protection ---
     # If the scene classifier determines the area is clean (clean_prob >= 0.65),
-    # suppress weak, isolated, or ambiguous false positive items
-    if clean_prob >= 0.65:
+    # suppress weak, isolated, or ambiguous false positive items unless a real road dump was confirmed
+    has_dump = any(p.get('class_name') == 'garbage_dump' for p in predictions)
+    if clean_prob >= 0.65 and not has_dump:
         predictions = [p for p in predictions if p.get('confidence', 0) >= 72.0 and p.get('class_name') in {'plastic', 'cardboard', 'metal', 'biological'}]
 
     # --- Final Realistic Decision (NO FAKE BOUNDING BOXES) ---
