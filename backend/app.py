@@ -1004,6 +1004,21 @@ def upload_frame():
         if not data or len(data) < 100:
             return jsonify({"status": "error", "message": "Empty frame"}), 400
 
+        # Dedicated pipeline for PC/laptop webcam (prevents overwriting mobile field broadcast)
+        if request.headers.get('X-Source') == 'laptop_webcam':
+            try:
+                import io
+                from PIL import Image
+                img = Image.open(io.BytesIO(data)).convert('RGB')
+                analysis = analyze_image_unified(img, conf_thresh=0.28)
+                preds = analysis.get('predictions', []) if isinstance(analysis, dict) else []
+                return jsonify({
+                    "status": "success",
+                    "predictions": preds
+                })
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
+
         # Ingest live GPS telemetry from mobile HTTP headers
         x_lat = request.headers.get('X-GPS-Lat')
         x_lng = request.headers.get('X-GPS-Lng')

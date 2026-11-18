@@ -26,6 +26,7 @@ Dataset.zip
 backend/last_upload.jpg
 backend/*_backup.pt
 backend/snapshots/snap_DET-2*.jpg
+backend/snapshots/snap_DET_2*.jpg
 garbage_detection/alerts/*.jpg
 garbage_detection/alerts/*.png
 garbage_detection/alerts/**/*.jpg

@@ -19,7 +19,7 @@ const CAMERAS = [
 export default function LiveCamera() {
   const [running, setRunning] = useState(true);
   const [captured, setCaptured] = useState(false);
-  const [selectedCam, setSelectedCam] = useState("webcam");
+  const [selectedCam, setSelectedCam] = useState("mobile-broadcast");
   const [aspectMode, setAspectMode] = useState("16/9"); // "16/9", "9/16", "theater"
   const [viewMode, setViewMode] = useState("contain"); // 'contain' (fit entire frame) or 'cover' (fill screen edge-to-edge)
   const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.35:8080/video");
@@ -176,7 +176,10 @@ export default function LiveCamera() {
         try {
           const res = await fetch("/api/upload_frame", {
             method: "POST",
-            headers: { "Content-Type": "image/jpeg" },
+            headers: { 
+              "Content-Type": "image/jpeg",
+              "X-Source": "laptop_webcam"
+            },
             body: blob
           });
 
