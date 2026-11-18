@@ -110,7 +110,7 @@ WASTE_METADATA = {
     'biological': {'label': 'Organic / Food waste', 'category': 'Organic waste · Compostable', 'priority': 'Medium', 'type': 'Organic'},
     'other': {'label': 'Street litter / Mixed debris', 'category': 'Mixed Municipal Waste', 'priority': 'Medium', 'type': 'Mixed Waste'},
 
-    # Generic COCO waste items
+    # Strict generic COCO waste items ONLY (everyday objects like bags, chargers, and books are excluded)
     'bottle': {'label': 'Plastic bottle', 'category': 'Recyclable plastic · PET', 'priority': 'Medium', 'type': 'Plastic'},
     'wine glass': {'label': 'Glass bottle / shard', 'category': 'Glass waste · Recyclable', 'priority': 'High', 'type': 'Glass'},
     'cup': {'label': 'Paper cup', 'category': 'Paper waste · Coated', 'priority': 'Low', 'type': 'Paper'},
@@ -119,23 +119,15 @@ WASTE_METADATA = {
     'orange': {'label': 'Food waste (Orange peel)', 'category': 'Organic waste · Compostable', 'priority': 'Low', 'type': 'Organic'},
     'sandwich': {'label': 'Food waste', 'category': 'Organic waste · Compostable', 'priority': 'Low', 'type': 'Organic'},
     'carrot': {'label': 'Vegetable scrap', 'category': 'Organic waste · Compostable', 'priority': 'Low', 'type': 'Organic'},
-    'fork': {'label': 'Plastic fork', 'category': 'Single-use plastic', 'priority': 'Medium', 'type': 'Plastic'},
-    'knife': {'label': 'Plastic cutlery', 'category': 'Solid Waste', 'priority': 'Medium', 'type': 'Plastic'},
-    'spoon': {'label': 'Plastic spoon', 'category': 'Single-use plastic', 'priority': 'Medium', 'type': 'Plastic'},
-    'bowl': {'label': 'Disposable bowl', 'category': 'Plastic / Paper waste', 'priority': 'Medium', 'type': 'Plastic'},
-    'book': {'label': 'Discarded paper / book', 'category': 'Paper waste · Recyclable', 'priority': 'Low', 'type': 'Paper'},
-    'handbag': {'label': 'Plastic bag / pouch', 'category': 'Soft plastic · LDPE', 'priority': 'Medium', 'type': 'Plastic'},
-    'backpack': {'label': 'Discarded bag / textile', 'category': 'Solid Waste · Fabric & Debris', 'priority': 'Medium', 'type': 'Textile'},
-    'suitcase': {'label': 'Dumped luggage / bag', 'category': 'Solid Waste · Bulky Litter', 'priority': 'Medium', 'type': 'Solid Waste'},
-    'umbrella': {'label': 'Discarded umbrella', 'category': 'Solid Waste · Mixed Litter', 'priority': 'Low', 'type': 'Mixed Waste'},
 }
 
-# Clean indoor / office / decorative objects that should NEVER trigger false garbage alerts
+# Clean indoor / office / household objects that should NEVER trigger false garbage alerts
 INDOOR_CLEAN_CLASSES = {
     'tv', 'laptop', 'potted plant', 'keyboard', 'mouse',
     'cell phone', 'chair', 'couch', 'bed', 'dining table',
     'refrigerator', 'microwave', 'oven', 'sink', 'vase', 'clock',
-    'monitor', 'desk', 'toilet'
+    'monitor', 'desk', 'toilet', 'book', 'backpack', 'handbag',
+    'suitcase', 'umbrella', 'remote'
 }
 
 def adapt_road_environmental_lighting(img_np):
@@ -397,6 +389,12 @@ def analyze_image_unified(img, conf_thresh=0.38):
                     if top_pct < 10.0 and height_pct < 12.0:
                         continue
 
+                    # Filter weak predictions & suppress generic 'other' noise
+                    if conf < 48.0:
+                        continue
+                    if cls_name == 'other' and conf < 68.0:
+                        continue
+
                     meta = WASTE_METADATA.get(cls_name, {
                         'label': f'{cls_name.capitalize()} waste',
                         'category': 'Mixed Municipal Waste',
@@ -426,6 +424,9 @@ def analyze_image_unified(img, conf_thresh=0.38):
 
     # --- Signal 3: Secondary COCO Waste Items (reusing cached single-pass detector output) ---
     for cls_name, conf, x1, y1, x2, y2 in coco_candidate_boxes:
+        if conf < 58.0 or cls_name not in WASTE_METADATA:
+            continue
+
         left_pct = round((x1 / img_width) * 100, 2)
         top_pct = round((y1 / img_height) * 100, 2)
         width_pct = round(((x2 - x1) / img_width) * 100, 2)
@@ -468,6 +469,12 @@ def analyze_image_unified(img, conf_thresh=0.38):
 
     # --- NMS Deduplication: Merge overlapping boxes across multiple models ---
     predictions = apply_nms_predictions(predictions, iou_thresh=0.45)
+
+    # --- Dual Confirmation: Scene-level Clean Protection ---
+    # If the scene classifier determines the area is clean (clean_prob >= 0.65),
+    # suppress weak, isolated, or ambiguous false positive items
+    if clean_prob >= 0.65:
+        predictions = [p for p in predictions if p.get('confidence', 0) >= 72.0 and p.get('class_name') in {'plastic', 'cardboard', 'metal', 'biological'}]
 
     # --- Final Realistic Decision (NO FAKE BOUNDING BOXES) ---
     if len(predictions) > 0:
@@ -786,15 +793,16 @@ def field_ai_worker():
             if frame is None:
                 continue
 
-            # Run inference on NVIDIA RTX GPU with NMS and 38% precision filter
+            # Run inference on NVIDIA RTX GPU with NMS and 48% precision filter
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
-            res = analyze_image_unified(pil_img, conf_thresh=0.38)
+            res = analyze_image_unified(pil_img, conf_thresh=0.48)
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Auto persist detected garbage to XAMPP MySQL with live mobile GPS and Geolocation Snapshot
-            if res.get("is_garbage") and len(preds) > 0:
+            # Auto persist detected garbage to XAMPP MySQL only when real high-confidence waste is localized
+            valid_waste = [p for p in preds if p.get('confidence', 0) >= 55.0]
+            if res.get("is_garbage") and len(valid_waste) > 0:
                 now_t = time.time()
                 # Debounce: Capture snapshot at most once every 3.5 seconds
                 if (now_t - last_snapshot_time) > 3.5:
