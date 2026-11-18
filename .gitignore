@@ -25,6 +25,7 @@ Dataset.zip
 # Temporary / Cached Detection Uploads & Alerts
 backend/last_upload.jpg
 backend/*_backup.pt
+backend/snapshots/snap_DET-2*.jpg
 garbage_detection/alerts/*.jpg
 garbage_detection/alerts/*.png
 garbage_detection/alerts/**/*.jpg

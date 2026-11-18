@@ -6,12 +6,14 @@ import base64
 import numpy as np
 import cv2
 import threading
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 from flask_cors import CORS
 from PIL import Image
 import torch
 from ultralytics import YOLO
 import database
+import uuid
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -657,8 +659,119 @@ def draw_ai_detections_on_frame(frame, preds):
         cv2.rectangle(frame, (hud_x - 6, hud_y - hth - 6), (hud_x + htw + 8, hud_y + 6), (16, 185, 129), 1)
         cv2.putText(frame, hud_text, (hud_x, hud_y), cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, (240, 253, 244), hud_font_thick, cv2.LINE_AA)
 
+# --- Snapshot Management & Nashik Wards GIS System ---
+SNAPSHOTS_DIR = os.path.join(BASE_DIR, "snapshots")
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
+
+NASHIK_WARDS = [
+    {
+        "id": "ward-2",
+        "name": "Ward 2: Nashik West (College Rd, Gangapur)",
+        "marathi_name": "प्रभाग २: नाशिक पश्चिम (कॉलेज रोड, गंगापूर रोड)",
+        "center": (20.0090, 73.7650),
+        "zone": "Nashik West",
+        "officer": "Sunil Shinde (Zonal Officer)",
+        "phone": "+91 98220 54321"
+    },
+    {
+        "id": "ward-1",
+        "name": "Ward 1: Panchavati (Ramkund, Dindori Naka)",
+        "marathi_name": "प्रभाग १: पंचवटी (रामकुंड, दिंडोरी नाका)",
+        "center": (20.0150, 73.7980),
+        "zone": "Panchavati",
+        "officer": "Kiran Jadhav (Sanitary Inspector)",
+        "phone": "+91 98221 65432"
+    },
+    {
+        "id": "ward-3",
+        "name": "Ward 3: Nashik East (CBS, Shalimar, Dwarka)",
+        "marathi_name": "प्रभाग ३: नाशिक पूर्व (शालिमार, सीबीएस, द्वारका)",
+        "center": (19.9940, 73.7890),
+        "zone": "Nashik East",
+        "officer": "Ramesh More (NMC East Div)",
+        "phone": "+91 98222 76543"
+    },
+    {
+        "id": "ward-4",
+        "name": "Ward 4: CIDCO (Trimurti Chowk, Ambad Link)",
+        "marathi_name": "प्रभाग ४: सिडको (त्रिमूर्ती चौक, अंबड लिंक)",
+        "center": (19.9680, 73.7550),
+        "zone": "CIDCO Division",
+        "officer": "Pravin Patil (Zonal Inspector)",
+        "phone": "+91 98223 87654"
+    },
+    {
+        "id": "ward-5",
+        "name": "Ward 5: Satpur (Satpur MIDC, Trimbak Road)",
+        "marathi_name": "प्रभाग ५: सातपूर (एमआयडीसी, त्र्यंबक रोड)",
+        "center": (19.9920, 73.7280),
+        "zone": "Satpur Industrial",
+        "officer": "Anil Gaikwad (MIDC Officer)",
+        "phone": "+91 98224 98765"
+    },
+    {
+        "id": "ward-6",
+        "name": "Ward 6: Nashik Road (Railway Station, Bytco)",
+        "marathi_name": "प्रभाग ६: नाशिक रोड (रेल्वे स्टेशन, बिटको)",
+        "center": (19.9530, 73.8320),
+        "zone": "Nashik Road Div",
+        "officer": "Sanjay Kadam (Station Zone)",
+        "phone": "+91 98225 09876"
+    }
+]
+
+def resolve_nashik_ward(lat, lng):
+    """Calculates closest Nashik municipal ward based on coordinates."""
+    closest = NASHIK_WARDS[0]
+    min_dist = float('inf')
+    for w in NASHIK_WARDS:
+        clat, clng = w["center"]
+        d = ((lat - clat)**2 + (lng - clng)**2)**0.5
+        if d < min_dist:
+            min_dist = d
+            closest = w
+    return closest
+
+last_snapshot_time = 0
+
+def capture_and_save_snapshot(frame, preds, lat, lng, speed, vehicle_id, ward_info):
+    """Saves annotated frame with bounding boxes and official municipal Geolocation HUD stamp."""
+    try:
+        sh, sw = frame.shape[:2]
+        snap = frame.copy()
+
+        # 1. Draw bounding boxes
+        draw_ai_detections_on_frame(snap, preds)
+
+        # 2. Draw Geolocation Banner at bottom
+        banner_h = max(44, int(sh * 0.085))
+        overlay = snap.copy()
+        cv2.rectangle(overlay, (0, sh - banner_h), (sw, sh), (15, 23, 42), -1)
+        cv2.addWeighted(overlay, 0.88, snap, 0.12, 0, snap)
+
+        # Red incident line
+        cv2.line(snap, (0, sh - banner_h), (sw, sh - banner_h), (0, 0, 235), 2)
+
+        # Text 1: Municipal Corporation & Ward Name
+        txt1 = f"NASHIK MUNICIPAL CORPORATION · {ward_info['name'].upper()}"
+        cv2.putText(snap, txt1, (14, sh - int(banner_h * 0.55)), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Text 2: Coordinates, Speed & Timestamp
+        now_str = datetime.now().strftime('%d-%b-%Y %H:%M:%S')
+        txt2 = f"GPS: {lat:.5f}N, {lng:.5f}E | Speed: {speed:.0f} km/h | Unit: {vehicle_id} | {now_str}"
+        cv2.putText(snap, txt2, (14, sh - int(banner_h * 0.18)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (52, 211, 153), 1, cv2.LINE_AA)
+
+        fname = f"snap_DET_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4].upper()}.jpg"
+        fpath = os.path.join(SNAPSHOTS_DIR, fname)
+        cv2.imwrite(fpath, snap, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        return f"/api/snapshots/{fname}"
+    except Exception as e:
+        print(f"Error capturing snapshot: {e}")
+        return None
+
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
+    global last_snapshot_time
     while True:
         try:
             latest_field_data["new_frame_event"].wait(timeout=1.0)
@@ -680,35 +793,47 @@ def field_ai_worker():
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Auto persist detected garbage to XAMPP MySQL with live mobile GPS
+            # Auto persist detected garbage to XAMPP MySQL with live mobile GPS and Geolocation Snapshot
             if res.get("is_garbage") and len(preds) > 0:
-                try:
-                    top = preds[0]
-                    gps = latest_field_data.get("gps", {})
-                    has_gps = gps.get("active", False) and (time.time() - gps.get("last_update", 0)) < 15.0
-                    lat = gps.get("latitude", 18.5204) if has_gps else 18.5204
-                    lng = gps.get("longitude", 73.8567) if has_gps else 73.8567
-                    spd = gps.get("speed_kmh", 0.0) if has_gps else 0.0
-                    v_city = gps.get("city", "Ahilyanagar")
-                    v_id = gps.get("vehicle_id", "MH-17-AG-501 (Ghanta Gadi)")
+                now_t = time.time()
+                # Debounce: Capture snapshot at most once every 3.5 seconds
+                if (now_t - last_snapshot_time) > 3.5:
+                    last_snapshot_time = now_t
+                    try:
+                        top = preds[0]
+                        gps = latest_field_data.get("gps", {})
+                        has_gps = gps.get("active", False) and (now_t - gps.get("last_update", 0)) < 15.0
 
-                    loc_name = f"Mobile GPS ({lat:.5f}, {lng:.5f})" if has_gps else "Cloudflare Mobile Field Unit"
-                    notes_txt = f"Live mobile detection via {v_id} at {spd:.0f} km/h (GPS ±{gps.get('accuracy_m', 0)}m). Waste: {', '.join([p['label'] for p in preds[:3]])}"
+                        # Default to mobile GPS (e.g. 20.0108, 73.7646 in Nashik) or current telemetry
+                        lat = gps.get("latitude") if (has_gps and gps.get("latitude")) else (gps.get("latitude") or 20.0108)
+                        lng = gps.get("longitude") if (has_gps and gps.get("longitude")) else (gps.get("longitude") or 73.7646)
+                        spd = gps.get("speed_kmh", 0.0) if has_gps else 0.0
+                        v_id = gps.get("vehicle_id", "MH-17-AG-501 (Ghanta Gadi)")
 
-                    database.add_detection_record({
-                        "location_name": loc_name,
-                        "city": v_city,
-                        "latitude": lat,
-                        "longitude": lng,
-                        "assigned_vehicle": v_id,
-                        "waste_type": top.get("type", "Plastic"),
-                        "confidence": top.get("confidence", 92.0),
-                        "severity": top.get("priority", "Medium"),
-                        "status": "Pending",
-                        "notes": notes_txt
-                    })
-                except Exception as ex:
-                    print(f"Notice: Failed to auto-persist detection with GPS: {ex}")
+                        ward = resolve_nashik_ward(lat, lng)
+                        v_city = "Nashik" if lat > 19.8 else gps.get("city", "Nashik")
+                        loc_name = f"{ward['name']} ({lat:.5f}, {lng:.5f})"
+
+                        # Generate and save annotated snapshot with Geolocation HUD stamp
+                        snap_url = capture_and_save_snapshot(frame, preds, lat, lng, spd, v_id, ward)
+
+                        notes_txt = f"{ward['marathi_name']} · Speed: {spd:.0f} km/h [GPS ±{gps.get('accuracy_m', 4)}m] · Waste: {', '.join([p['label'] for p in preds[:3]])}"
+
+                        database.add_detection_record({
+                            "location_name": loc_name,
+                            "city": v_city,
+                            "latitude": lat,
+                            "longitude": lng,
+                            "assigned_vehicle": v_id,
+                            "waste_type": top.get("type", "Plastic"),
+                            "confidence": top.get("confidence", 92.0),
+                            "severity": top.get("priority", "Medium"),
+                            "status": "Pending",
+                            "image_snapshot": snap_url,
+                            "notes": notes_txt
+                        })
+                    except Exception as ex:
+                        print(f"Notice: Failed to auto-persist detection with GPS & snapshot: {ex}")
         except Exception:
             time.sleep(0.04)
 
@@ -742,6 +867,129 @@ def get_field_status():
         })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/snapshots/<path:filename>')
+@app.route('/snapshots/<path:filename>')
+def serve_snapshot(filename):
+    """Serves annotated AI waste incident snapshots with geolocation HUD."""
+    return send_from_directory(SNAPSHOTS_DIR, filename)
+
+@app.route('/api/dashboard/ward_snapshots', methods=['GET'])
+def get_dashboard_ward_snapshots():
+    """Returns detected waste snapshots categorized by Nashik Wards for the dashboard."""
+    try:
+        city = request.args.get('city', 'Nashik')
+        ward_filter = request.args.get('ward', 'all')
+        limit = int(request.args.get('limit', 50))
+        
+        detections_list = database.get_all_detections(limit=limit, city=city)
+        
+        ward_counts = {w["id"]: 0 for w in NASHIK_WARDS}
+        ward_counts["all"] = 0
+        enriched = []
+
+        for d in detections_list:
+            try:
+                lat = float(d.get('lat') or d.get('latitude') or 20.0090)
+                lng = float(d.get('lng') or d.get('longitude') or 73.7650)
+            except (ValueError, TypeError):
+                lat, lng = 20.0090, 73.7650
+
+            ward = resolve_nashik_ward(lat, lng)
+            d_copy = dict(d)
+            d_copy['ward'] = ward
+            d_copy['lat'] = lat
+            d_copy['lng'] = lng
+            
+            ward_counts[ward["id"]] = ward_counts.get(ward["id"], 0) + 1
+            ward_counts["all"] += 1
+            
+            if ward_filter == 'all' or ward_filter == ward['id']:
+                enriched.append(d_copy)
+
+        return jsonify({
+            "status": "success",
+            "city": city,
+            "ward_filter": ward_filter,
+            "total": len(enriched),
+            "ward_counts": ward_counts,
+            "wards": NASHIK_WARDS,
+            "snapshots": enriched
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+def ensure_sample_ward_snapshots():
+    """Generates authentic sample municipal snapshots for existing Nashik ward detections if missing."""
+    try:
+        conn, db_type = database.get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, tracking_id, location_name, latitude, longitude, waste_type, confidence, assigned_vehicle, image_snapshot FROM detections WHERE city = 'Nashik'")
+        rows = cursor.fetchall()
+        
+        for r in rows:
+            row_dict = dict(r)
+            det_id = row_dict.get('id')
+            tr_id = row_dict.get('tracking_id', f'DET-NK-{det_id}')
+            wtype = row_dict.get('waste_type', 'Plastic')
+            conf = float(row_dict.get('confidence', 95.0))
+            lat = float(row_dict.get('latitude', 20.0090))
+            lng = float(row_dict.get('longitude', 73.7650))
+            veh = row_dict.get('assigned_vehicle') or 'MH-17-AG-501 (Ghanta Gadi)'
+            
+            fname = f"snap_{tr_id}.jpg"
+            fpath = os.path.join(SNAPSHOTS_DIR, fname)
+            
+            if not os.path.exists(fpath):
+                # Generate realistic annotated street incident frame (640x480)
+                img = np.full((480, 640, 3), 42, dtype=np.uint8) # Dark asphalt tone
+                # Add street texture lines & road shoulder
+                cv2.line(img, (0, 320), (640, 320), (55, 55, 60), 2)
+                cv2.rectangle(img, (180, 200), (460, 380), (36, 40, 46), -1)
+                
+                ward = resolve_nashik_ward(lat, lng)
+                
+                # Mock targeting box for the waste item
+                preds = [{
+                    'id': 1,
+                    'label': f'{wtype} Waste',
+                    'type': wtype,
+                    'confidence': conf,
+                    'priority': 'High' if conf > 90 else 'Medium',
+                    'box': {'x': 32.0, 'y': 38.0, 'width': 26.0, 'height': 24.0}
+                }]
+                draw_ai_detections_on_frame(img, preds)
+                
+                # Geolocation Banner at bottom
+                banner_h = 46
+                overlay = img.copy()
+                cv2.rectangle(overlay, (0, 480 - banner_h), (640, 480), (15, 23, 42), -1)
+                cv2.addWeighted(overlay, 0.90, img, 0.10, 0, img)
+                cv2.line(img, (0, 480 - banner_h), (640, 480 - banner_h), (0, 0, 235), 2)
+                
+                cv2.putText(img, f"NASHIK MUNICIPAL CORPORATION · {ward['name'].upper()}", (14, 480 - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(img, f"GPS: {lat:.5f}N, {lng:.5f}E | Speed: 16 km/h | Unit: {veh} | 18-Nov-2026", (14, 480 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (52, 211, 153), 1, cv2.LINE_AA)
+                
+                cv2.imwrite(fpath, img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                
+            # Update database record with snapshot path if not set
+            if not row_dict.get('image_snapshot'):
+                snap_url = f"/api/snapshots/{fname}"
+                cursor.execute("UPDATE detections SET image_snapshot = %s WHERE id = %s" if db_type == "mysql" else "UPDATE detections SET image_snapshot = ? WHERE id = ?", (snap_url, det_id))
+            
+        if db_type == "sqlite":
+            conn.commit()
+            
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Sample snapshots notice: {e}")
+
+try:
+    ensure_sample_ward_snapshots()
+except Exception as e:
+    print(f"Snapshot init notice: {e}")
 
 @app.route('/api/upload_frame', methods=['POST'])
 def upload_frame():

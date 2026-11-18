@@ -199,23 +199,24 @@ def add_detection_record(data):
         sev = data.get('severity', 'High' if conf > 90 else 'Medium')
         status = data.get('status', 'Pending')
         vehicle = data.get('assigned_vehicle', 'MH-17-AG-501 (Ghanta Gadi)')
+        image_snapshot = data.get('image_snapshot', None)
         notes = data.get('notes', 'Detected via AI Edge Camera')
 
         if db_type == "mysql":
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes))
             new_id = cursor.lastrowid
         else:
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes))
             conn.commit()
             new_id = cursor.lastrowid
 
-        return {"id": new_id, "tracking_id": tracking_id, "status": "success", "db": db_type}
+        return {"id": new_id, "tracking_id": tracking_id, "status": "success", "db": db_type, "image_snapshot": image_snapshot}
     except Exception as e:
         print(f"Error adding detection: {e}")
         return {"status": "error", "message": str(e)}
