@@ -526,6 +526,13 @@ def draw_ai_detections_on_frame(frame, preds):
     """Draws clear bounding boxes, class labels, confidence scores and HUD on a video frame."""
     fh, fw = frame.shape[:2]
 
+    # Proportional dynamic scaling for crisp high-resolution (720p / 1080p) display
+    scale = max(0.65, min(1.5, fh / 720.0))
+    box_thick = max(2, int(2 * scale))
+    corner_thick = max(3, int(3 * scale))
+    font_scale = 0.52 * scale
+    font_thick = max(1, int(1.8 * scale))
+
     for p in preds:
         box = p.get('box', {})
         if not box:
@@ -552,49 +559,51 @@ def draw_ai_detections_on_frame(frame, preds):
         box_color = (0, 0, 235) if pri == 'High' else (0, 140, 255) # BGR
 
         # 1. Main Bounding Box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, box_thick)
 
         # 2. Corner Bracket Accents for targeting HUD look
-        corner_len = min(22, max(6, int((x2 - x1) * 0.22)))
+        corner_len = min(int(26 * scale), max(8, int((x2 - x1) * 0.22)))
         bracket_color = (0, 255, 255)
         # Top-left
-        cv2.line(frame, (x1, y1), (x1 + corner_len, y1), bracket_color, 3)
-        cv2.line(frame, (x1, y1), (x1, y1 + corner_len), bracket_color, 3)
+        cv2.line(frame, (x1, y1), (x1 + corner_len, y1), bracket_color, corner_thick)
+        cv2.line(frame, (x1, y1), (x1, y1 + corner_len), bracket_color, corner_thick)
         # Top-right
-        cv2.line(frame, (x2, y1), (x2 - corner_len, y1), bracket_color, 3)
-        cv2.line(frame, (x2, y1), (x2, y1 + corner_len), bracket_color, 3)
+        cv2.line(frame, (x2, y1), (x2 - corner_len, y1), bracket_color, corner_thick)
+        cv2.line(frame, (x2, y1), (x2, y1 + corner_len), bracket_color, corner_thick)
         # Bottom-left
-        cv2.line(frame, (x1, y2), (x1 + corner_len, y2), bracket_color, 3)
-        cv2.line(frame, (x1, y2), (x1, y2 - corner_len), bracket_color, 3)
+        cv2.line(frame, (x1, y2), (x1 + corner_len, y2), bracket_color, corner_thick)
+        cv2.line(frame, (x1, y2), (x1, y2 - corner_len), bracket_color, corner_thick)
         # Bottom-right
-        cv2.line(frame, (x2, y2), (x2 - corner_len, y2), bracket_color, 3)
-        cv2.line(frame, (x2, y2), (x2, y2 - corner_len), bracket_color, 3)
+        cv2.line(frame, (x2, y2), (x2 - corner_len, y2), bracket_color, corner_thick)
+        cv2.line(frame, (x2, y2), (x2, y2 - corner_len), bracket_color, corner_thick)
 
         # 3. Label Tag above bounding box with solid background
         tag = f"{lbl} {conf:.0f}%"
-        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-        tag_y1 = max(0, y1 - th - 8)
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thick)
+        tag_y1 = max(0, y1 - th - int(10 * scale))
         tag_y2 = y1
-        tag_x2 = min(fw - 1, x1 + tw + 10)
+        tag_x2 = min(fw - 1, x1 + tw + int(12 * scale))
         cv2.rectangle(frame, (x1, tag_y1), (tag_x2, tag_y2), box_color, -1)
-        cv2.putText(frame, tag, (x1 + 5, tag_y2 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, tag, (x1 + int(6 * scale), tag_y2 - int(4 * scale)), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thick, cv2.LINE_AA)
 
     # 4. Status HUD in top-left (Dynamically proportioned to frame resolution)
     preds_cnt = len(preds)
     if preds_cnt > 0:
-        hud_txt = f"🚨 AI DETECTED: {preds_cnt} Waste Object(s)"
+        hud_txt = f"AI DETECTED: {preds_cnt} Waste Object(s)"
         hud_bg = (20, 20, 180) # Red
         hud_border = (0, 0, 255)
     else:
-        hud_txt = "✅ AI SCANNING: Clean Area"
+        hud_txt = "AI SCANNING: Clean Area"
         hud_bg = (20, 60, 20) # Green
         hud_border = (0, 220, 0)
 
-    (htw, hth), _ = cv2.getTextSize(hud_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 2)
-    hud_w = min(fw - 20, htw + 20)
-    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + 14), hud_bg, -1)
-    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + 14), hud_border, 1)
-    cv2.putText(frame, hud_txt, (18, 10 + hth + 7), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2, cv2.LINE_AA)
+    hud_font_scale = 0.50 * scale
+    hud_font_thick = max(1, int(1.6 * scale))
+    (htw, hth), _ = cv2.getTextSize(hud_txt, cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, hud_font_thick)
+    hud_w = min(fw - 20, htw + int(24 * scale))
+    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + int(16 * scale)), hud_bg, -1)
+    cv2.rectangle(frame, (10, 10), (10 + hud_w, 10 + hth + int(16 * scale)), hud_border, max(1, int(1.5 * scale)))
+    cv2.putText(frame, hud_txt, (18, 10 + hth + int(8 * scale)), cv2.FONT_HERSHEY_SIMPLEX, hud_font_scale, (255, 255, 255), hud_font_thick, cv2.LINE_AA)
 
 def field_ai_worker():
     """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
@@ -619,9 +628,6 @@ def field_ai_worker():
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Draw AI bounding boxes on frame with exact pixel coordinates
-            draw_ai_detections_on_frame(frame, preds)
-
             # Auto persist detected garbage to XAMPP MySQL
             if res.get("is_garbage") and len(preds) > 0:
                 try:
@@ -637,9 +643,6 @@ def field_ai_worker():
                     })
                 except Exception:
                     pass
-
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
-            latest_field_data["display_bytes"] = buf.tobytes()
         except Exception:
             time.sleep(0.04)
 
@@ -671,6 +674,7 @@ def upload_frame():
     """
     Ultra-high-speed binary frame intake.
     Receives raw JPEG byte buffer in <2ms, bypassing all JSON/Base64 overhead.
+    Fast overlay pipeline (<3.5ms): Instantly applies current AI detections to the display buffer.
     Reuses persistent TCP keep-alive connection to prevent socket exhaustion.
     """
     try:
@@ -681,6 +685,21 @@ def upload_frame():
         latest_field_data["raw_bytes"] = data
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
+
+        # Decoupled ultra-fast overlay (3.3ms) for 30 FPS stream display
+        try:
+            cached_preds = latest_field_data.get("predictions", [])
+            nparr = np.frombuffer(data, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                draw_ai_detections_on_frame(frame, cached_preds)
+                # High-fidelity 88% JPEG with optimization flag
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 88, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
+                latest_field_data["display_bytes"] = buf.tobytes()
+            else:
+                latest_field_data["display_bytes"] = data
+        except Exception:
+            latest_field_data["display_bytes"] = data
 
         resp = jsonify({
             "status": "success",

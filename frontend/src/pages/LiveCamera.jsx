@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Camera, Check, ChevronDown, Clock3, Focus, Leaf, Paperclip,
-  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw, Smartphone, ExternalLink
+  Play, Recycle, Square, Trash2, Video, Zap, Activity, AlertCircle, RefreshCw, Smartphone, ExternalLink, Maximize2, Minimize2
 } from "lucide-react";
 import Card from '../components/Card.jsx';
 import SectionHead from '../components/SectionHead.jsx';
@@ -20,6 +20,7 @@ export default function LiveCamera() {
   const [running, setRunning] = useState(true);
   const [captured, setCaptured] = useState(false);
   const [selectedCam, setSelectedCam] = useState("webcam");
+  const [viewMode, setViewMode] = useState("contain"); // 'contain' (fit entire frame) or 'cover' (fill screen edge-to-edge)
   const [mobileIpUrl, setMobileIpUrl] = useState("http://192.168.1.35:8080/video");
   const [activeMobileUrl, setActiveMobileUrl] = useState("http://192.168.1.35:8080/video");
   const [streamMode, setStreamMode] = useState("ai"); // 'ai' or 'direct'
@@ -326,6 +327,9 @@ export default function LiveCamera() {
                 <b style={{ fontSize: '13px', color: 'var(--ink)' }}>Mobile Streamer Mode (No Dashboard on Phone):</b>
                 <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
                   On your mobile phone, open: <code style={{ padding: '2px 8px', borderRadius: '4px', background: 'rgba(59,130,246,0.12)', color: '#2563EB', fontWeight: 700 }}>/cam</code> at the end of the Cloudflare link (e.g. <span style={{ color: '#10B981', fontWeight: 600 }}>https://...trycloudflare.com/cam</span>)
+                  <span style={{ marginLeft: '10px', color: '#64748B', fontWeight: 500 }}>
+                    · 💡 টিप: मोबाईल आडवा (Landscape) केल्यास PC वर पूर्ण 16:9 HD दिसेल.
+                  </span>
                 </div>
               </div>
             </div>
@@ -345,7 +349,15 @@ export default function LiveCamera() {
               <img
                 src="/api/broadcast_stream"
                 alt="Cloudflare Mobile Broadcast Feed"
-                style={{ width: '100%', height: '100%', objectFit: 'contain', position: 'absolute', inset: 0, background: '#000' }}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: viewMode,
+                  position: 'absolute',
+                  inset: 0,
+                  background: '#000',
+                  transition: 'object-fit 0.25s ease'
+                }}
               />
             )}
 
@@ -446,13 +458,22 @@ export default function LiveCamera() {
           </div>
 
           <div className="camera-controls">
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <Button kind={running ? "danger" : "primary"} onClick={() => setRunning(!running)}>
                 {running ? <><Square size={15} /> Stop detection</> : <><Play size={15} /> Start detection</>}
               </Button>
               <Button kind="secondary" onClick={handleCapture}>
                 {captured ? <><Check size={17} /> Captured</> : <><Camera size={17} /> Capture frame</>}
               </Button>
+              {selectedCam === "mobile-broadcast" && (
+                <Button
+                  kind="secondary"
+                  onClick={() => setViewMode(prev => prev === 'contain' ? 'cover' : 'contain')}
+                  title={viewMode === 'contain' ? "Expand video to fill screen (removes black bars)" : "Fit entire video inside window"}
+                >
+                  {viewMode === 'contain' ? <><Maximize2 size={15} /> Fill Screen (Edge-to-Edge)</> : <><Minimize2 size={15} /> Fit to Window</>}
+                </Button>
+              )}
             </div>
 
             {/* Camera Switcher Dropdown */}

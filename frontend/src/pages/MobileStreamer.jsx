@@ -7,6 +7,7 @@ import {
 export default function MobileStreamer() {
   const [streaming, setStreaming] = useState(true);
   const [facingMode, setFacingMode] = useState("environment"); // environment = back camera
+  const [qualityMode, setQualityMode] = useState("high"); // "high" (1080p · Sharpest), "balanced" (720p), "fast" (540p)
   const [fps, setFps] = useState(0);
   const [bytesSent, setBytesSent] = useState(0);
   const [city, setCity] = useState("Ahilyanagar");
@@ -15,6 +16,7 @@ export default function MobileStreamer() {
   const [hasTorch, setHasTorch] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [isLandscape, setIsLandscape] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -39,8 +41,8 @@ export default function MobileStreamer() {
       const constraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920, min: 640 },
+          height: { ideal: 1080, min: 480 },
         },
         audio: false
       };
@@ -110,15 +112,16 @@ export default function MobileStreamer() {
     return () => {
       streamActiveRef.current = false;
     };
-  }, [streaming]);
+  }, [streaming, qualityMode]);
 
   const runStreamLoop = async () => {
     while (streamActiveRef.current) {
       const startTime = performance.now();
       await sendSingleFrame();
       const elapsed = performance.now() - startTime;
-      // Target ~22 FPS (45ms per frame budget)
-      const delay = Math.max(12, 45 - elapsed);
+      // High mode: ~25 FPS (40ms budget); Balanced: ~24 FPS (42ms budget); Fast: ~28 FPS (35ms budget)
+      const targetBudget = qualityMode === "high" ? 40 : (qualityMode === "balanced" ? 42 : 35);
+      const delay = Math.max(5, targetBudget - elapsed);
       await new Promise(r => setTimeout(r, delay));
     }
   };
@@ -130,13 +133,24 @@ export default function MobileStreamer() {
       }
 
       const video = videoRef.current;
-      const vw = video.videoWidth || 720;
-      const vh = video.videoHeight || 1280;
+      const vw = video.videoWidth || 1080;
+      const vh = video.videoHeight || 1920;
 
-      // Preserve EXACT native aspect ratio of camera (Portrait or Landscape)
-      // Scale so largest dimension is 720px for crisp HD clarity and fast upload
-      const maxDim = 720;
-      const scale = Math.min(1.0, maxDim / Math.max(vw, vh));
+      if ((vw > vh) !== isLandscape) {
+        setIsLandscape(vw > vh);
+      }
+
+      // Dynamic quality & resolution tiers:
+      // High mode (1080p · Ultra Sharp): maxDim = 1080, quality = 0.85
+      // Balanced mode (720p HD): maxDim = 840, quality = 0.80
+      // Fast mode (540p Speed): maxDim = 600, quality = 0.70
+      const cfg = {
+        high: { maxDim: 1080, quality: 0.85 },
+        balanced: { maxDim: 840, quality: 0.80 },
+        fast: { maxDim: 600, quality: 0.70 }
+      }[qualityMode] || { maxDim: 1080, quality: 0.85 };
+
+      const scale = Math.min(1.0, cfg.maxDim / Math.max(vw, vh));
       const targetW = Math.round(vw * scale);
       const targetH = Math.round(vh * scale);
 
@@ -179,7 +193,7 @@ export default function MobileStreamer() {
         } finally {
           resolve();
         }
-      }, 'image/jpeg', 0.65);
+      }, 'image/jpeg', cfg.quality);
     });
   };
 
@@ -231,6 +245,23 @@ export default function MobileStreamer() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={() => setQualityMode(prev => prev === 'high' ? 'balanced' : (prev === 'balanced' ? 'fast' : 'high'))}
+            title="Switch streaming quality preset"
+            style={{
+              padding: '4px 10px',
+              borderRadius: '20px',
+              background: qualityMode === 'high' ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.1)',
+              border: qualityMode === 'high' ? '1px solid #3B82F6' : '1px solid rgba(255,255,255,0.2)',
+              color: qualityMode === 'high' ? '#60A5FA' : '#E2E8F0',
+              fontSize: '11px',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            {qualityMode === 'high' ? '🌟 1080p Ultra' : (qualityMode === 'balanced' ? '⚡ 720p HD' : '🏎️ 480p Speed')}
+          </button>
           <div style={{
             padding: '4px 10px',
             borderRadius: '20px',
@@ -307,21 +338,27 @@ export default function MobileStreamer() {
           bottom: '105px',
           left: '50%',
           transform: 'translateX(-50%)',
-          background: 'rgba(15, 23, 42, 0.75)',
+          background: isLandscape ? 'rgba(16, 185, 129, 0.85)' : 'rgba(15, 23, 42, 0.85)',
           backdropFilter: 'blur(6px)',
           borderRadius: '20px',
-          padding: '5px 12px',
+          padding: '6px 14px',
           fontSize: '11px',
-          color: '#CBD5E1',
+          fontWeight: 600,
+          color: '#fff',
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
           pointerEvents: 'none',
           zIndex: 15,
           whiteSpace: 'nowrap',
-          border: '1px solid rgba(255,255,255,0.1)'
+          border: isLandscape ? '1px solid #10B981' : '1px solid rgba(255,255,255,0.15)',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
         }}>
-          <span>🔄 Rotate phone sideways for full widescreen</span>
+          {isLandscape ? (
+            <span>🖥️ 16:9 Widescreen Active (Matching PC Screen)</span>
+          ) : (
+            <span>📱 Portrait Mode · Rotate phone sideways for full 16:9 widescreen</span>
+          )}
         </div>
 
         {/* Recent Detection Notification Banner on Mobile */}
