@@ -3,6 +3,7 @@ os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 import io
 import time
 import base64
+from collections import deque
 import numpy as np
 import cv2
 import threading
@@ -456,25 +457,34 @@ def analyze_image_unified(img, conf_thresh=0.38):
 
     # --- Signal 3.5: Roadside Open Garbage Dump / Waste Heap Engine ---
     # Specially tailored for Indian roads & highways where waste accumulates as massive continuous heaps/dumps along shoulders.
-    if classifier_model is not None and not has_indoor_context:
+    # CRITICAL ARCHITECTURAL SAFEGUARDS:
+    # 1. Reject if persons or indoor items are present (prevents room/office/people false alarms).
+    # 2. If physical waste items are already detected, threshold is 0.85.
+    # 3. If zero physical waste detected, require extreme confidence (>= 0.95) to prevent wall/texture hallucinations.
+    has_persons = len(person_boxes) > 0
+    has_prior_waste_detection = len(predictions) > 0
+
+    if classifier_model is not None and not has_indoor_context and not has_persons:
         try:
-            h_start = int(img_height * 0.28)
+            h_start = int(img_height * 0.30)
             shoulders = [
-                ("Left Roadside Dump", (0, h_start, int(img_width * 0.78), img_height)),
-                ("Right Roadside Dump", (int(img_width * 0.22), h_start, img_width, img_height)),
-                ("Road Center Waste Heap", (int(img_width * 0.10), h_start, int(img_width * 0.90), img_height))
+                ("Left Roadside Dump", (0, h_start, int(img_width * 0.75), img_height)),
+                ("Right Roadside Dump", (int(img_width * 0.25), h_start, img_width, img_height)),
+                ("Road Center Waste Heap", (int(img_width * 0.15), h_start, int(img_width * 0.85), img_height))
             ]
             
             dump_candidates = []
             crops = [img.crop(s[1]) for s in shoulders]
             res_batch = classifier_model(crops, imgsz=256, device=device, verbose=False)
             
+            dump_threshold = 0.85 if has_prior_waste_detection else 0.95
+
             for (dump_name, (x1, y1, x2, y2)), r in zip(shoulders, res_batch):
                 if r is not None and getattr(r, 'probs', None) is not None:
                     probs_list = r.probs.data.tolist()
                     if len(probs_list) > 1:
                         p_dump = float(probs_list[1])
-                        if p_dump >= 0.85:
+                        if p_dump >= dump_threshold:
                             dump_candidates.append((dump_name, p_dump, x1, y1, x2, y2))
             
             if dump_candidates:
@@ -829,8 +839,16 @@ def capture_and_save_snapshot(frame, preds, lat, lng, speed, vehicle_id, ward_in
         print(f"Error capturing snapshot: {e}")
         return None
 
+temporal_detection_buffer = deque(maxlen=6)
+
 def field_ai_worker():
-    """Dedicated background worker: runs unified YOLOv8 inference asynchronously without choking the stream."""
+    """
+    Dedicated Senior AI Vision Worker:
+    Pillar 1: Temporal 3-Frame Consensus Engine (deque buffer)
+    Pillar 2: Motion Blur Rejection Gate (Laplacian var < 38.0)
+    Pillar 3: Dynamic GPS Speed Throttle (Stationary vs Vehicular)
+    Pillar 4: Spatial Deduplication & Chronic Hotspot Engine (25m radius)
+    """
     global last_snapshot_time
     while True:
         try:
@@ -846,6 +864,14 @@ def field_ai_worker():
             if frame is None:
                 continue
 
+            # Pillar 2: Motion Blur Rejection Gate (<1ms check)
+            # Rejects frames blurred by vehicle potholes, road bumps or hand shakes
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            laplacian_var = cv2.Laplacian(gray_frame, cv2.CV_64F).var()
+            if laplacian_var < 38.0:
+                # Discard blurry frame immediately - prevents distorted feature hallucinations
+                continue
+
             # Run inference on NVIDIA RTX GPU with NMS and 48% precision filter
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_img = Image.fromarray(rgb)
@@ -853,32 +879,50 @@ def field_ai_worker():
             preds = res.get('predictions', [])
             latest_field_data["predictions"] = preds
 
-            # Auto persist detected garbage to XAMPP MySQL only when real high-confidence waste is localized
+            # Valid high-confidence waste predictions
             valid_waste = [p for p in preds if p.get('confidence', 0) >= 55.0]
 
             # Municipal Volume & Dump Filter:
-            # We don't dispatch municipal units or flood the dashboard for 1 isolated tiny bottle or bag.
             # Snapshots trigger ONLY for:
             # 1) Roadside Open Garbage Dump (कचऱ्याचा ढीग) via Signal 3.5
-            # 2) Substantial waste pile or multi-item cluster (total bounding box area >= 6% or >= 3 items)
+            # 2) Substantial waste pile or multi-item cluster (total area >= 6% or >= 3 items)
             is_road_dump = any(p.get('class_name') == 'garbage_dump' for p in valid_waste)
             total_waste_area = sum([(p.get('box', {}).get('width', 0) * p.get('box', {}).get('height', 0)) / 100.0 for p in valid_waste])
             is_substantial_pile = total_waste_area >= 6.0 or len(valid_waste) >= 3
 
-            if res.get("is_garbage") and (is_road_dump or is_substantial_pile):
+            # Pillar 1: Temporal Multi-Frame Consensus Engine
+            # Store detection state in sliding window buffer
+            is_candidate_garbage = bool(res.get("is_garbage") and (is_road_dump or is_substantial_pile))
+            temporal_detection_buffer.append({
+                "time": time.time(),
+                "is_garbage": is_candidate_garbage,
+                "is_road_dump": is_road_dump,
+                "is_substantial_pile": is_substantial_pile
+            })
+
+            # Consensus Rule: Require at least 2 garbage confirmations in the last 4 sharp frames
+            recent_confirmations = sum(1 for f in list(temporal_detection_buffer)[-4:] if f["is_garbage"])
+            if recent_confirmations < 2:
+                # Transient single-frame optical anomaly rejected by consensus engine
+                continue
+
+            if is_candidate_garbage:
                 now_t = time.time()
-                # Debounce: Capture snapshot at most once every 3.5 seconds
-                if (now_t - last_snapshot_time) > 3.5:
+                gps = latest_field_data.get("gps", {})
+                has_gps = gps.get("active", False) and (now_t - gps.get("last_update", 0)) < 15.0
+                spd = float(gps.get("speed_kmh", 0.0)) if has_gps else 0.0
+
+                # Pillar 3: Dynamic GPS Speed Throttle
+                # When stationary (< 2 km/h): throttle to at least 45s to avoid duplicate flooding
+                # When vehicle driving (> 3 km/h): interval is 6.0s for continuous road coverage
+                throttle_interval = 45.0 if spd < 2.0 else 6.0
+
+                if (now_t - last_snapshot_time) > throttle_interval:
                     last_snapshot_time = now_t
                     try:
-                        top = preds[0]
-                        gps = latest_field_data.get("gps", {})
-                        has_gps = gps.get("active", False) and (now_t - gps.get("last_update", 0)) < 15.0
-
-                        # Default to mobile GPS (e.g. 20.0108, 73.7646 in Nashik) or current telemetry
+                        top = preds[0] if preds else {"type": "Mixed Waste", "confidence": 92.0, "priority": "Medium"}
                         lat = gps.get("latitude") if (has_gps and gps.get("latitude")) else (gps.get("latitude") or 20.0108)
                         lng = gps.get("longitude") if (has_gps and gps.get("longitude")) else (gps.get("longitude") or 73.7646)
-                        spd = gps.get("speed_kmh", 0.0) if has_gps else 0.0
                         v_id = gps.get("vehicle_id", "MH-17-AG-501 (Ghanta Gadi)")
 
                         ward = resolve_nashik_ward(lat, lng)
@@ -890,7 +934,8 @@ def field_ai_worker():
 
                         notes_txt = f"{ward['marathi_name']} · Speed: {spd:.0f} km/h [GPS ±{gps.get('accuracy_m', 4)}m] · Waste: {', '.join([p['label'] for p in preds[:3]])}"
 
-                        database.add_detection_record({
+                        # Pillar 4: Spatial Deduplication & Hotspot Engine (25m radius, 4h window)
+                        dedup_res = database.check_and_deduplicate_detection({
                             "location_name": loc_name,
                             "city": v_city,
                             "latitude": lat,
@@ -902,14 +947,34 @@ def field_ai_worker():
                             "status": "Pending",
                             "image_snapshot": snap_url,
                             "notes": notes_txt
-                        })
+                        }, radius_meters=25.0, time_window_hours=4.0)
+
+                        if dedup_res.get("action") == "merged":
+                            print(f"ℹ️ Spatial Deduplication: Merged into Incident #{dedup_res.get('id')} ({dedup_res.get('distance_meters')}m away, Hits: {dedup_res.get('recurrence_count')}). Hotspot: {dedup_res.get('is_hotspot')}")
+                        else:
+                            print(f"✅ New Unique Field Incident Logged #{dedup_res.get('id')} in {ward['name']}")
                     except Exception as ex:
-                        print(f"Notice: Failed to auto-persist detection with GPS & snapshot: {ex}")
+                        print(f"Notice: Failed to persist detection with GPS & snapshot: {ex}")
         except Exception:
             time.sleep(0.04)
 
 ai_worker_thread = threading.Thread(target=field_ai_worker, daemon=True)
 ai_worker_thread.start()
+
+@app.route('/api/dashboard/ward_leaderboard', methods=['GET'])
+def get_ward_leaderboard_api():
+    """Returns Ward Cleanliness Performance Index (CPI) Leaderboard across Nashik Municipal Wards (Pillar 5)."""
+    try:
+        city = request.args.get('city', 'Nashik')
+        leaderboard = database.get_ward_leaderboard(city)
+        return jsonify({
+            "status": "success",
+            "city": city,
+            "leaderboard": leaderboard,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/field_status', methods=['GET'])
 def get_field_status():

@@ -8,6 +8,7 @@ Supports:
 import os
 import time
 import uuid
+import math
 import pymysql
 import sqlite3
 from datetime import datetime
@@ -81,6 +82,7 @@ def init_db():
                 is_verified TINYINT DEFAULT 0,
                 is_hotspot TINYINT DEFAULT 0,
                 hotspot_cluster_id VARCHAR(64) NULL,
+                recurrence_count INT DEFAULT 1,
                 notes TEXT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
@@ -121,6 +123,7 @@ def init_db():
                 is_verified INTEGER DEFAULT 0,
                 is_hotspot INTEGER DEFAULT 0,
                 hotspot_cluster_id TEXT NULL,
+                recurrence_count INTEGER DEFAULT 1,
                 notes TEXT NULL
             );
             """)
@@ -148,6 +151,7 @@ def init_db():
             ("is_verified", "TINYINT DEFAULT 0" if db_type == "mysql" else "INTEGER DEFAULT 0"),
             ("is_hotspot", "TINYINT DEFAULT 0" if db_type == "mysql" else "INTEGER DEFAULT 0"),
             ("hotspot_cluster_id", "VARCHAR(64) NULL" if db_type == "mysql" else "TEXT NULL"),
+            ("recurrence_count", "INT DEFAULT 1" if db_type == "mysql" else "INTEGER DEFAULT 1"),
         ]
 
         if db_type == "mysql":
@@ -250,25 +254,236 @@ def add_detection_record(data):
         vehicle = data.get('assigned_vehicle', 'MH-17-AG-501 (Ghanta Gadi)')
         image_snapshot = data.get('image_snapshot', None)
         notes = data.get('notes', 'Detected via AI Edge Camera')
+        recurrence_count = int(data.get('recurrence_count', 1))
+        is_hotspot = 1 if (data.get('is_hotspot') or recurrence_count >= 3) else 0
+        hotspot_cluster_id = data.get('hotspot_cluster_id', None)
 
         if db_type == "mysql":
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes, recurrence_count, is_hotspot, hotspot_cluster_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes, recurrence_count, is_hotspot, hotspot_cluster_id))
             new_id = cursor.lastrowid
         else:
             cursor.execute("""
-            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes))
+            INSERT INTO detections (tracking_id, location_name, city, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, image_snapshot, notes, recurrence_count, is_hotspot, hotspot_cluster_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (tracking_id, loc, city, lat, lng, wtype, conf, sev, status, vehicle, image_snapshot, notes, recurrence_count, is_hotspot, hotspot_cluster_id))
             conn.commit()
             new_id = cursor.lastrowid
 
-        return {"id": new_id, "tracking_id": tracking_id, "status": "success", "db": db_type, "image_snapshot": image_snapshot}
+        return {"id": new_id, "tracking_id": tracking_id, "status": "success", "db": db_type, "image_snapshot": image_snapshot, "recurrence_count": recurrence_count, "is_hotspot": bool(is_hotspot)}
     except Exception as e:
         print(f"Error adding detection: {e}")
         return {"status": "error", "message": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+def haversine_distance_meters(lat1, lon1, lat2, lon2):
+    """Calculates ground distance in meters between two GPS coordinates using the Haversine formula."""
+    try:
+        R = 6371000.0  # Earth radius in meters
+        phi1 = math.radians(float(lat1))
+        phi2 = math.radians(float(lat2))
+        delta_phi = math.radians(float(lat2) - float(lat1))
+        delta_lambda = math.radians(float(lon2) - float(lon1))
+        a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+    except Exception:
+        return 999999.0
+
+def check_and_deduplicate_detection(data, radius_meters=25.0, time_window_hours=4.0):
+    """
+    Spatial & Temporal Deduplication Engine (Pillar 4):
+    If an active incident is detected within radius_meters (default 25m) and within the last time_window_hours (default 4h):
+    - Increment recurrence_count.
+    - If recurrence_count >= 3, automatically escalate to 'is_hotspot = 1' and 'severity = Critical'.
+    - Do NOT generate a duplicate dashboard card or flood the database.
+    - If outside 25m: create a brand new incident record.
+    """
+    conn, db_type = get_db()
+    cursor = conn.cursor()
+    try:
+        lat = float(data.get('latitude', 20.0108))
+        lng = float(data.get('longitude', 73.7646))
+
+        # Query recent uncleaned incidents within ±0.003 deg (~330m)
+        lat_min = lat - 0.003
+        lat_max = lat + 0.003
+        lng_min = lng - 0.003
+        lng_max = lng + 0.003
+
+        query = """
+        SELECT id, tracking_id, latitude, longitude, recurrence_count, is_hotspot, status, notes, timestamp
+        FROM detections
+        WHERE status IN ('Pending', 'Assigned', 'In Progress')
+          AND latitude BETWEEN %s AND %s
+          AND longitude BETWEEN %s AND %s
+        ORDER BY id DESC LIMIT 25
+        """ if db_type == "mysql" else """
+        SELECT id, tracking_id, latitude, longitude, recurrence_count, is_hotspot, status, notes, timestamp
+        FROM detections
+        WHERE status IN ('Pending', 'Assigned', 'In Progress')
+          AND latitude BETWEEN ? AND ?
+          AND longitude BETWEEN ? AND ?
+        ORDER BY id DESC LIMIT 25
+        """
+
+        cursor.execute(query, (lat_min, lat_max, lng_min, lng_max))
+        candidates = cursor.fetchall()
+
+        matched_incident = None
+        min_dist = 999999.0
+
+        for cand in candidates:
+            c_dict = dict(cand)
+            c_lat = float(c_dict.get('latitude', 0))
+            c_lng = float(c_dict.get('longitude', 0))
+            d_m = haversine_distance_meters(lat, lng, c_lat, c_lng)
+            if d_m <= radius_meters and d_m < min_dist:
+                min_dist = d_m
+                matched_incident = c_dict
+
+        if matched_incident:
+            # Merging into existing hotspot/incident
+            inc_id = matched_incident['id']
+            curr_count = int(matched_incident.get('recurrence_count') or 1) + 1
+            is_hotspot = 1 if curr_count >= 3 else int(matched_incident.get('is_hotspot') or 0)
+            sev = 'Critical' if is_hotspot else 'High'
+
+            now_str = datetime.now().strftime("%d-%b %H:%M")
+            old_notes = str(matched_incident.get('notes') or '')
+            if f"Hits: {curr_count}" not in old_notes:
+                updated_notes = f"{old_notes} | Re-observed at {now_str} (Hits: {curr_count})"
+            else:
+                updated_notes = old_notes
+
+            if db_type == "mysql":
+                cursor.execute("""
+                UPDATE detections
+                SET recurrence_count = %s,
+                    is_hotspot = %s,
+                    severity = %s,
+                    notes = %s
+                WHERE id = %s
+                """, (curr_count, is_hotspot, sev, updated_notes, inc_id))
+            else:
+                cursor.execute("""
+                UPDATE detections
+                SET recurrence_count = ?,
+                    is_hotspot = ?,
+                    severity = ?,
+                    notes = ?
+                WHERE id = ?
+                """, (curr_count, is_hotspot, sev, updated_notes, inc_id))
+                conn.commit()
+
+            return {
+                "action": "merged",
+                "id": inc_id,
+                "tracking_id": matched_incident.get('tracking_id'),
+                "distance_meters": round(min_dist, 1),
+                "recurrence_count": curr_count,
+                "is_hotspot": bool(is_hotspot),
+                "status": "success"
+            }
+        else:
+            # Create fresh incident record
+            data['recurrence_count'] = 1
+            data['is_hotspot'] = 0
+            created = add_detection_record(data)
+            created["action"] = "created"
+            return created
+    finally:
+        cursor.close()
+        conn.close()
+
+NASHIK_WARDS = [
+    {"id": "W1", "name": "प्रभाग १: पंचवटी (Panchavati)", "sub_areas": "रामकुंड, दिंडोरी नाका, तपोवन", "officer": "सुनील शिंदे (सॅनिटरी इन्स्पेक्टर)"},
+    {"id": "W2", "name": "प्रभाग २: नाशिक पश्चिम (Nashik West)", "sub_areas": "कॉलेज रोड, गंगापूर रोड, कॅनडा कॉर्नर", "officer": "प्रवीण पाटील (सॅनिटरी इन्स्पेक्टर)"},
+    {"id": "W3", "name": "प्रभाग ३: नाशिक पूर्व (Nashik East)", "sub_areas": "शालीमार, जुने सीबीएस, द्वारका", "officer": "रमेश पवार (सॅनिटरी इन्स्पेक्टर)"},
+    {"id": "W4", "name": "प्रभाग ४: सिडको (CIDCO)", "sub_areas": "त्रिमूर्ती चौक, उत्तम नगर, अंबड लिंक रोड", "officer": "किरण जाधव (सॅनिटरी इन्स्पेक्टर)"},
+    {"id": "W5", "name": "प्रभाग ५: सातपूर (Satpur)", "sub_areas": "एमआयडीसी इंडस्ट्रियल, त्र्यंबक रोड", "officer": "दीपक मोरे (सॅनिटरी इन्स्पेक्टर)"},
+    {"id": "W6", "name": "प्रभाग ६: नाशिक रोड (Nashik Road)", "sub_areas": "रेल्वे स्टेशन, बिटको पॉईंट, जेल रोड", "officer": "संजय गायकवाड (सॅनिटरी इन्स्पेक्टर)"}
+]
+
+def get_ward_leaderboard(city='Nashik'):
+    """
+    Computes Cleanliness Performance Index (CPI) Leaderboard across Nashik Municipal Corporation Wards (Pillar 5).
+    CPI Formula: max(10, min(100, 100 - (active_incidents * 5 + hotspots * 8) + (cleaned_incidents * 3)))
+    """
+    conn, db_type = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT location_name, status, is_hotspot FROM detections")
+        rows = cursor.fetchall()
+
+        ward_stats = {w['id']: {
+            "id": w['id'],
+            "name": w['name'],
+            "sub_areas": w['sub_areas'],
+            "officer": w['officer'],
+            "total": 0,
+            "active": 0,
+            "cleaned": 0,
+            "hotspots": 0
+        } for w in NASHIK_WARDS}
+
+        for r in rows:
+            d = dict(r)
+            loc = (d.get('location_name') or '').lower()
+            st = d.get('status')
+            hot = int(d.get('is_hotspot') or 0)
+
+            matched_id = None
+            if "panchavati" in loc or "ward 1" in loc or "पंचवटी" in loc or "रामकुंड" in loc:
+                matched_id = "W1"
+            elif "west" in loc or "college" in loc or "gangapur" in loc or "ward 2" in loc or "पश्चिम" in loc:
+                matched_id = "W2"
+            elif "east" in loc or "shalimar" in loc or "cbs" in loc or "ward 3" in loc or "dwarka" in loc or "पूर्व" in loc:
+                matched_id = "W3"
+            elif "cidco" in loc or "सिडको" in loc or "trimurti" in loc or "ward 4" in loc:
+                matched_id = "W4"
+            elif "satpur" in loc or "सातपूर" in loc or "midc" in loc or "ward 5" in loc:
+                matched_id = "W5"
+            elif "nashik road" in loc or "रोड" in loc or "bytco" in loc or "ward 6" in loc:
+                matched_id = "W6"
+            else:
+                matched_id = "W2"
+
+            if matched_id in ward_stats:
+                ward_stats[matched_id]["total"] += 1
+                if st == 'Cleaned':
+                    ward_stats[matched_id]["cleaned"] += 1
+                else:
+                    ward_stats[matched_id]["active"] += 1
+                if hot:
+                    ward_stats[matched_id]["hotspots"] += 1
+
+        leaderboard = []
+        for w_id, s in ward_stats.items():
+            if s["total"] == 0:
+                cpi = 98.0
+                grade = "A+ (उत्कृष्ट - Pristine)"
+            else:
+                raw_cpi = 100 - (s["active"] * 5 + s["hotspots"] * 8) + (s["cleaned"] * 3)
+                cpi = round(max(15.0, min(100.0, float(raw_cpi))), 1)
+                if cpi >= 90:
+                    grade = "A+ (उत्कृष्ट - Pristine)"
+                elif cpi >= 75:
+                    grade = "A (चांगले - Good)"
+                elif cpi >= 60:
+                    grade = "B (मध्यम - Satisfactory)"
+                else:
+                    grade = "C (तातडीने सफाई आवश्यक - Action Needed)"
+            s["cpi"] = cpi
+            s["grade"] = grade
+            leaderboard.append(s)
+
+        leaderboard.sort(key=lambda x: x["cpi"], reverse=True)
+        return leaderboard
     finally:
         cursor.close()
         conn.close()
@@ -327,6 +542,7 @@ def get_all_detections(limit=100, status=None, waste_type=None, city=None):
             d['is_verified'] = bool(d.get('is_verified', 0))
             d['is_hotspot'] = bool(d.get('is_hotspot', 0))
             d['hotspot_cluster_id'] = d.get('hotspot_cluster_id')
+            d['recurrence_count'] = int(d.get('recurrence_count') or 1)
             try:
                 d['lat'] = float(d['latitude']) if d.get('latitude') is not None else 19.0948
                 d['lng'] = float(d['longitude']) if d.get('longitude') is not None else 74.7480

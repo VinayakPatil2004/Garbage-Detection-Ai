@@ -47,6 +47,22 @@ export default function Dashboard({ navigate }) {
     const [verifyOfficer, setVerifyOfficer] = useState("Kiran Jadhav (Sanitary Inspector)");
     const [verifyLoading, setVerifyLoading] = useState(false);
     const [afterImageFile, setAfterImageFile] = useState(null);
+    const [wardLeaderboard, setWardLeaderboard] = useState([]);
+    const [showLeaderboard, setShowLeaderboard] = useState(true);
+
+    const fetchWardLeaderboard = async () => {
+      try {
+        const res = await fetch(`/api/dashboard/ward_leaderboard?city=Nashik&_t=${Date.now()}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === "success") {
+            setWardLeaderboard(json.leaderboard || []);
+          }
+        }
+      } catch (e) {
+        console.warn("Could not fetch ward leaderboard:", e);
+      }
+    };
 
     const fetchWardSnapshots = async (ward = selectedWard) => {
       try {
@@ -142,7 +158,11 @@ export default function Dashboard({ navigate }) {
 
     useEffect(() => {
       fetchWardSnapshots(selectedWard);
-      const interval = setInterval(() => fetchWardSnapshots(selectedWard), 3000);
+      fetchWardLeaderboard();
+      const interval = setInterval(() => {
+        fetchWardSnapshots(selectedWard);
+        fetchWardLeaderboard();
+      }, 4000);
       return () => clearInterval(interval);
     }, [selectedWard]);
 
@@ -200,6 +220,163 @@ export default function Dashboard({ navigate }) {
         </div>
         
         <div className="dashboard-grid">
+          {/* Ward Cleanliness Performance Index (CPI) Leaderboard Card (Pillar 5) */}
+          <Card className="span-two" style={{ gridColumn: '1 / -1', padding: '20px 22px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={20} color="#10B981" />
+                  <b style={{ fontSize: '16px', color: 'var(--ink)' }}>NMC Ward Cleanliness Performance Index (प्रभाग स्वच्छता निर्देशांक - CPI)</b>
+                  <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#059669', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '12px' }}>
+                    SWACHH-AI LEADERBOARD
+                  </span>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
+                  Algorithmic cleanliness audit ranking across all 6 Nashik Municipal Corporation administrative wards with real-time hotspot tracking.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={() => setShowLeaderboard(!showLeaderboard)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {showLeaderboard ? <ChevronDown size={14} /> : <Minus size={14} />} {showLeaderboard ? 'Collapse' : 'Expand'}
+                </button>
+                <button
+                  onClick={fetchWardLeaderboard}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                  title="Refresh CPI Leaderboard"
+                >
+                  <RefreshCw size={13} /> Refresh CPI
+                </button>
+              </div>
+            </div>
+
+            {showLeaderboard && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--surface-2)', color: 'var(--muted)', borderBottom: '1.5px solid var(--line)', textAlign: 'left' }}>
+                      <th style={{ padding: '10px 14px', borderRadius: '8px 0 0 8px' }}>Rank & Ward</th>
+                      <th style={{ padding: '10px 14px' }}>Key Areas / Loci</th>
+                      <th style={{ padding: '10px 14px' }}>Sanitary Inspector</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Active Incidents</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Cleaned & Verified</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'center' }}>Chronic Hotspots</th>
+                      <th style={{ padding: '10px 14px', minWidth: '160px' }}>Cleanliness Index (CPI)</th>
+                      <th style={{ padding: '10px 14px', textAlign: 'right', borderRadius: '0 8px 8px 0' }}>Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {wardLeaderboard.map((w, idx) => (
+                      <tr key={w.id} style={{ borderBottom: '1px solid var(--line)', transition: 'background 0.15s ease' }}>
+                        <td style={{ padding: '12px 14px', fontWeight: 700, color: 'var(--ink)' }}>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '22px',
+                            height: '22px',
+                            borderRadius: '50%',
+                            background: idx === 0 ? '#FEF3C7' : (idx === 1 ? '#E2E8F0' : 'var(--surface-2)'),
+                            color: idx === 0 ? '#D97706' : (idx === 1 ? '#475569' : 'var(--muted)'),
+                            fontSize: '11px',
+                            fontWeight: 800,
+                            marginRight: '8px'
+                          }}>
+                            #{idx + 1}
+                          </span>
+                          {w.name}
+                        </td>
+                        <td style={{ padding: '12px 14px', color: 'var(--muted)', fontSize: '12px' }}>{w.sub_areas}</td>
+                        <td style={{ padding: '12px 14px', color: 'var(--ink)', fontSize: '12px', fontWeight: 500 }}>{w.officer}</td>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                          <span style={{
+                            background: w.active > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.1)',
+                            color: w.active > 0 ? '#DC2626' : '#059669',
+                            padding: '3px 8px',
+                            borderRadius: '12px',
+                            fontWeight: 700,
+                            fontSize: '11px'
+                          }}>
+                            {w.active}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                          <span style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#059669', padding: '3px 8px', borderRadius: '12px', fontWeight: 700, fontSize: '11px' }}>
+                            {w.cleaned}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                          {w.hotspots > 0 ? (
+                            <span style={{ background: '#DC2626', color: '#fff', padding: '2px 7px', borderRadius: '10px', fontWeight: 800, fontSize: '11px' }}>
+                              {w.hotspots}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--muted)', fontSize: '12px' }}>0</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ flex: 1, background: 'var(--surface-2)', height: '7px', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div style={{
+                                width: `${w.cpi}%`,
+                                height: '100%',
+                                background: w.cpi >= 85 ? '#10B981' : (w.cpi >= 65 ? '#F59E0B' : '#DC2626'),
+                                borderRadius: '4px',
+                                transition: 'width 0.4s ease'
+                              }} />
+                            </div>
+                            <b style={{ fontSize: '12px', fontFamily: 'monospace', color: w.cpi >= 85 ? '#059669' : (w.cpi >= 65 ? '#D97706' : '#DC2626'), minWidth: '42px' }}>
+                              {w.cpi}%
+                            </b>
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 14px', textAlign: 'right' }}>
+                          <span style={{
+                            background: w.cpi >= 85 ? 'rgba(16, 185, 129, 0.15)' : (w.cpi >= 65 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)'),
+                            color: w.cpi >= 85 ? '#059669' : (w.cpi >= 65 ? '#D97706' : '#DC2626'),
+                            padding: '3px 9px',
+                            borderRadius: '12px',
+                            fontSize: '11px',
+                            fontWeight: 700
+                          }}>
+                            {w.grade}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
           {/* Nashik Wards AI Snapshots Section (Full Width) */}
           <Card className="span-two" style={{ gridColumn: '1 / -1', padding: '20px 22px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
@@ -418,6 +595,22 @@ export default function Dashboard({ navigate }) {
                             <CheckCircle size={10} /> AFTER PROOF
                           </span>
                         )}
+                        {item.is_hotspot && (
+                          <span style={{
+                            background: '#DC2626',
+                            color: '#fff',
+                            fontSize: '9px',
+                            fontWeight: 800,
+                            padding: '3px 6px',
+                            borderRadius: '6px',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <AlertTriangle size={10} /> CHRONIC HOTSPOT ({item.recurrence_count || 3}x)
+                          </span>
+                        )}
                       </div>
 
                       <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -510,6 +703,12 @@ export default function Dashboard({ navigate }) {
                           <span>Incident Time:</span>
                           <span>{item.date || 'Today'} · {item.time || 'Live'}</span>
                         </div>
+                        {item.recurrence_count > 1 && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#DC2626', fontWeight: 700 }}>
+                            <span>Spatial Deduplication:</span>
+                            <span>{item.recurrence_count} hits merged (25m radius)</span>
+                          </div>
+                        )}
                         {item.after_image_snapshot && (
                           <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 600 }}>
                             <span>Cleaned In:</span>
