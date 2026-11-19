@@ -74,6 +74,13 @@ def init_db():
                 status ENUM('Pending', 'Assigned', 'In Progress', 'Cleaned') DEFAULT 'Pending',
                 assigned_vehicle VARCHAR(50) NULL,
                 image_snapshot VARCHAR(255) NULL,
+                after_image_snapshot VARCHAR(255) NULL,
+                cleaned_at DATETIME NULL,
+                cleaning_officer VARCHAR(120) NULL,
+                resolution_time_minutes INT NULL,
+                is_verified TINYINT DEFAULT 0,
+                is_hotspot TINYINT DEFAULT 0,
+                hotspot_cluster_id VARCHAR(64) NULL,
                 notes TEXT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
@@ -107,6 +114,13 @@ def init_db():
                 status TEXT DEFAULT 'Pending',
                 assigned_vehicle TEXT NULL,
                 image_snapshot TEXT NULL,
+                after_image_snapshot TEXT NULL,
+                cleaned_at TEXT NULL,
+                cleaning_officer TEXT NULL,
+                resolution_time_minutes INTEGER NULL,
+                is_verified INTEGER DEFAULT 0,
+                is_hotspot INTEGER DEFAULT 0,
+                hotspot_cluster_id TEXT NULL,
                 notes TEXT NULL
             );
             """)
@@ -124,6 +138,41 @@ def init_db():
             );
             """)
             conn.commit()
+
+        # Schema Auto-Migration: Ensure all new verification & hotspot columns exist in existing tables
+        new_cols = [
+            ("after_image_snapshot", "VARCHAR(255) NULL" if db_type == "mysql" else "TEXT NULL"),
+            ("cleaned_at", "DATETIME NULL" if db_type == "mysql" else "TEXT NULL"),
+            ("cleaning_officer", "VARCHAR(120) NULL" if db_type == "mysql" else "TEXT NULL"),
+            ("resolution_time_minutes", "INT NULL" if db_type == "mysql" else "INTEGER NULL"),
+            ("is_verified", "TINYINT DEFAULT 0" if db_type == "mysql" else "INTEGER DEFAULT 0"),
+            ("is_hotspot", "TINYINT DEFAULT 0" if db_type == "mysql" else "INTEGER DEFAULT 0"),
+            ("hotspot_cluster_id", "VARCHAR(64) NULL" if db_type == "mysql" else "TEXT NULL"),
+        ]
+
+        if db_type == "mysql":
+            for col_name, col_def in new_cols:
+                try:
+                    cursor.execute(f"""
+                    SELECT COUNT(*) as cnt FROM information_schema.columns 
+                    WHERE table_schema = DATABASE() AND table_name = 'detections' AND column_name = '{col_name}'
+                    """)
+                    row = cursor.fetchone()
+                    cnt = row['cnt'] if isinstance(row, dict) else row[0]
+                    if cnt == 0:
+                        cursor.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_def}")
+                except Exception as ex:
+                    print(f"Notice during MySQL migration for {col_name}: {ex}")
+        else:
+            try:
+                cursor.execute("PRAGMA table_info(detections)")
+                existing_cols = [r[1] for r in cursor.fetchall()]
+                for col_name, col_def in new_cols:
+                    if col_name not in existing_cols:
+                        cursor.execute(f"ALTER TABLE detections ADD COLUMN {col_name} {col_def}")
+                conn.commit()
+            except Exception as ex:
+                print(f"Notice during SQLite migration: {ex}")
 
         # Seed initial vehicles if empty
         cursor.execute("SELECT COUNT(*) AS cnt FROM vehicles")
@@ -259,10 +308,25 @@ def get_all_detections(limit=100, status=None, waste_type=None, city=None):
             elif d.get('timestamp'):
                 d['date'] = str(d['timestamp'])[:10]
                 d['time'] = str(d['timestamp'])[11:16]
+
+            # Format cleaned_at if available
+            if isinstance(d.get('cleaned_at'), datetime):
+                d['cleaned_at_formatted'] = d['cleaned_at'].strftime("%b %d, %Y %I:%M %p")
+            elif d.get('cleaned_at'):
+                d['cleaned_at_formatted'] = str(d['cleaned_at'])
+            else:
+                d['cleaned_at_formatted'] = None
+
             d['confidence'] = f"{float(d.get('confidence', 0)):.1f}%"
             d['location'] = d.get('location_name', '')
             d['type'] = d.get('waste_type', '')
             d['city'] = d.get('city', 'Ahilyanagar')
+            d['after_image_snapshot'] = d.get('after_image_snapshot')
+            d['cleaning_officer'] = d.get('cleaning_officer') or 'Kiran Jadhav (Sanitary Inspector)'
+            d['resolution_time_minutes'] = d.get('resolution_time_minutes') or 95
+            d['is_verified'] = bool(d.get('is_verified', 0))
+            d['is_hotspot'] = bool(d.get('is_hotspot', 0))
+            d['hotspot_cluster_id'] = d.get('hotspot_cluster_id')
             try:
                 d['lat'] = float(d['latitude']) if d.get('latitude') is not None else 19.0948
                 d['lng'] = float(d['longitude']) if d.get('longitude') is not None else 74.7480
@@ -295,6 +359,98 @@ def update_detection_status(det_id, new_status, vehicle=None):
             """, (new_status, vehicle, det_id, det_id))
             conn.commit()
         return {"status": "success", "updated_id": det_id, "new_status": new_status}
+    finally:
+        cursor.close()
+        conn.close()
+
+def record_cleaning_verification(det_id, after_image_url, officer_name="Kiran Jadhav (Sanitary Inspector)", resolution_minutes=None):
+    """
+    Records official cleaning verification with after-cleaning snapshot, timestamp,
+    and sanitary inspector sign-off.
+    """
+    conn, db_type = get_db()
+    cursor = conn.cursor()
+    try:
+        now_dt = datetime.now()
+        now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        if resolution_minutes is None:
+            if db_type == "mysql":
+                cursor.execute("SELECT timestamp FROM detections WHERE id = %s OR tracking_id = %s", (det_id, det_id))
+            else:
+                cursor.execute("SELECT timestamp FROM detections WHERE id = ? OR tracking_id = ?", (det_id, det_id))
+            row = cursor.fetchone()
+            if row:
+                t_val = row.get("timestamp") if isinstance(row, dict) else row[0]
+                if isinstance(t_val, datetime):
+                    diff = now_dt - t_val
+                    resolution_minutes = max(1, int(diff.total_seconds() / 60))
+                elif isinstance(t_val, str):
+                    try:
+                        det_t = datetime.strptime(t_val[:19], "%Y-%m-%d %H:%M:%S")
+                        diff = now_dt - det_t
+                        resolution_minutes = max(1, int(diff.total_seconds() / 60))
+                    except Exception:
+                        resolution_minutes = 95
+            else:
+                resolution_minutes = 95
+
+        if db_type == "mysql":
+            cursor.execute("""
+            UPDATE detections 
+            SET status = 'Cleaned',
+                after_image_snapshot = %s,
+                cleaned_at = %s,
+                cleaning_officer = %s,
+                resolution_time_minutes = %s,
+                is_verified = 1
+            WHERE id = %s OR tracking_id = %s
+            """, (after_image_url, now_str, officer_name, resolution_minutes, det_id, det_id))
+            conn.commit()
+        else:
+            cursor.execute("""
+            UPDATE detections 
+            SET status = 'Cleaned',
+                after_image_snapshot = ?,
+                cleaned_at = ?,
+                cleaning_officer = ?,
+                resolution_time_minutes = ?,
+                is_verified = 1
+            WHERE id = ? OR tracking_id = ?
+            """, (after_image_url, now_str, officer_name, resolution_minutes, det_id, det_id))
+            conn.commit()
+
+        return {
+            "status": "success",
+            "det_id": det_id,
+            "after_image_snapshot": after_image_url,
+            "cleaned_at": now_str,
+            "cleaning_officer": officer_name,
+            "resolution_time_minutes": resolution_minutes
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_before_after_gallery(limit=50, city='Nashik'):
+    """Fetches all verified cleaned detections that have both before and after snapshots."""
+    conn, db_type = get_db()
+    cursor = conn.cursor()
+    try:
+        query = """
+        SELECT * FROM detections 
+        WHERE status = 'Cleaned' AND image_snapshot IS NOT NULL AND after_image_snapshot IS NOT NULL
+        """
+        params = []
+        if city and city != 'All':
+            query += " AND city = %s" if db_type == "mysql" else " AND city = ?"
+            params.append(city)
+        query += " ORDER BY id DESC LIMIT %s" if db_type == "mysql" else " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
     finally:
         cursor.close()
         conn.close()

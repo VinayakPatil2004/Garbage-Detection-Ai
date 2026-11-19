@@ -43,6 +43,10 @@ export default function Dashboard({ navigate }) {
     const [wardCounts, setWardCounts] = useState({});
     const [loadingSnapshots, setLoadingSnapshots] = useState(true);
     const [modalSnapshot, setModalSnapshot] = useState(null);
+    const [statusFilter, setStatusFilter] = useState("all"); // 'all' | 'pending' | 'cleaned'
+    const [verifyOfficer, setVerifyOfficer] = useState("Kiran Jadhav (Sanitary Inspector)");
+    const [verifyLoading, setVerifyLoading] = useState(false);
+    const [afterImageFile, setAfterImageFile] = useState(null);
 
     const fetchWardSnapshots = async (ward = selectedWard) => {
       try {
@@ -63,6 +67,55 @@ export default function Dashboard({ navigate }) {
         setLoadingSnapshots(false);
       }
     };
+
+    const handleVerifyCleaning = async (detId, officerName = verifyOfficer, file = afterImageFile) => {
+      setVerifyLoading(true);
+      try {
+        const formData = new FormData();
+        formData.append("officer_name", officerName || "Kiran Jadhav (Sanitary Inspector)");
+        if (file) {
+          formData.append("after_image", file);
+        }
+        const res = await fetch(`/api/detections/${detId}/verify_cleaning`, {
+          method: "POST",
+          body: formData
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "success") {
+            await fetchWardSnapshots(selectedWard);
+            if (modalSnapshot && (modalSnapshot.id === detId || modalSnapshot.tracking_id === detId)) {
+              setModalSnapshot(prev => ({
+                ...prev,
+                status: "Cleaned",
+                after_image_snapshot: data.verification.after_image_snapshot,
+                cleaned_at_formatted: data.verification.cleaned_at,
+                cleaning_officer: data.verification.cleaning_officer,
+                resolution_time_minutes: data.verification.resolution_time_minutes,
+                is_verified: true
+              }));
+            }
+            setAfterImageFile(null);
+          } else {
+            alert("Verification failed: " + (data.message || "Unknown error"));
+          }
+        }
+      } catch (err) {
+        console.error("Verification submit error:", err);
+      } finally {
+        setVerifyLoading(false);
+      }
+    };
+
+    const filteredSnapshots = useMemo(() => {
+      if (statusFilter === "pending") {
+        return wardSnapshots.filter(s => s.status !== "Cleaned");
+      }
+      if (statusFilter === "cleaned") {
+        return wardSnapshots.filter(s => s.status === "Cleaned");
+      }
+      return wardSnapshots;
+    }, [wardSnapshots, statusFilter]);
 
     const handleDeleteSnapshot = async (id, trackingId, e) => {
       if (e && e.stopPropagation) e.stopPropagation();
@@ -230,32 +283,75 @@ export default function Dashboard({ navigate }) {
               })}
             </div>
 
+            {/* Status Filter Sub-Bar */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '18px', background: 'var(--surface-2)', padding: '6px 12px', borderRadius: '10px' }}>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginRight: '4px' }}>Status Filter:</span>
+                {[
+                  { id: 'all', label: 'All Incidents (सर्व घटना)', count: wardSnapshots.length },
+                  { id: 'pending', label: 'Pending Cleaning (सफाई प्रलंबित)', count: wardSnapshots.filter(s => s.status !== 'Cleaned').length },
+                  { id: 'cleaned', label: 'Cleaned & Verified (Before vs After)', count: wardSnapshots.filter(s => s.status === 'Cleaned').length }
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => setStatusFilter(f.id)}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: statusFilter === f.id ? (f.id === 'cleaned' ? '#10B981' : (f.id === 'pending' ? '#F59E0B' : 'var(--ink)')) : 'transparent',
+                      color: statusFilter === f.id ? '#fff' : 'var(--muted)',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <span>{f.label}</span>
+                    <span style={{
+                      opacity: 0.9,
+                      background: 'rgba(255,255,255,0.22)',
+                      padding: '1px 6px',
+                      borderRadius: '8px',
+                      fontSize: '10px'
+                    }}>{f.count}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                Showing <b>{filteredSnapshots.length}</b> records
+              </div>
+            </div>
+
             {/* Snapshots Grid */}
             {loadingSnapshots ? (
               <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted)', fontSize: '13px' }}>
                 Loading Nashik Ward incident snapshots...
               </div>
-            ) : wardSnapshots.length === 0 ? (
+            ) : filteredSnapshots.length === 0 ? (
               <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: '12px' }}>
                 <Camera size={36} color="var(--muted-2)" style={{ marginBottom: '8px' }} />
-                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>No garbage detected in this ward yet</div>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>No incidents found for this filter</div>
                 <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
-                  Point mobile camera at street waste in this area to generate live snapshots with GPS coordinates.
+                  Try switching the ward or status filter above to inspect municipal incidents.
                 </div>
               </div>
             ) : (
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
                 gap: '16px'
               }}>
-                {wardSnapshots.map((item, idx) => (
+                {filteredSnapshots.map((item, idx) => (
                   <div
                     key={item.id || idx}
                     style={{
                       background: 'var(--surface)',
                       borderRadius: '12px',
-                      border: '1px solid var(--line)',
+                      border: item.status === 'Cleaned' ? '1.5px solid rgba(16, 185, 129, 0.4)' : '1px solid var(--line)',
                       overflow: 'hidden',
                       boxShadow: '0 2px 10px rgba(0,0,0,0.04)',
                       display: 'flex',
@@ -273,9 +369,9 @@ export default function Dashboard({ navigate }) {
                   >
                     {/* Snapshot Photo Container */}
                     <div
-                      style={{ position: 'relative', height: '175px', background: '#0f172a', cursor: 'pointer', overflow: 'hidden' }}
+                      style={{ position: 'relative', height: '180px', background: '#0f172a', cursor: 'pointer', overflow: 'hidden' }}
                       onClick={() => setModalSnapshot(item)}
-                      title="Click to enlarge snapshot photo"
+                      title="Click to inspect Before & After"
                     >
                       {item.image_snapshot ? (
                         <img
@@ -293,7 +389,7 @@ export default function Dashboard({ navigate }) {
                       )}
 
                       {/* Corner Badges */}
-                      <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: '6px' }}>
+                      <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                         <span style={{
                           background: item.severity === 'Critical' ? '#DC2626' : (item.severity === 'High' ? '#EA580C' : '#2563EB'),
                           color: '#fff',
@@ -306,6 +402,22 @@ export default function Dashboard({ navigate }) {
                         }}>
                           {item.waste_type || item.type} · {item.confidence}
                         </span>
+                        {item.after_image_snapshot && (
+                          <span style={{
+                            background: '#059669',
+                            color: '#fff',
+                            fontSize: '9px',
+                            fontWeight: 800,
+                            padding: '3px 6px',
+                            borderRadius: '6px',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}>
+                            <CheckCircle size={10} /> AFTER PROOF
+                          </span>
+                        )}
                       </div>
 
                       <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -345,12 +457,12 @@ export default function Dashboard({ navigate }) {
                         </button>
                       </div>
 
-                      {/* Enlarge Hint Pill */}
+                      {/* Enlarge / Compare Hint Pill */}
                       <div style={{
                         position: 'absolute',
                         bottom: 8,
                         right: 8,
-                        background: 'rgba(15, 23, 42, 0.85)',
+                        background: 'rgba(15, 23, 42, 0.88)',
                         color: '#fff',
                         fontSize: '10px',
                         fontWeight: 600,
@@ -360,7 +472,15 @@ export default function Dashboard({ navigate }) {
                         alignItems: 'center',
                         gap: '4px'
                       }}>
-                        <Maximize2 size={10} /> Enlarge
+                        {item.after_image_snapshot ? (
+                          <>
+                            <CheckCircle size={10} color="#4ade80" /> Before vs After
+                          </>
+                        ) : (
+                          <>
+                            <Maximize2 size={10} /> Inspect
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -390,70 +510,126 @@ export default function Dashboard({ navigate }) {
                           <span>Incident Time:</span>
                           <span>{item.date || 'Today'} · {item.time || 'Live'}</span>
                         </div>
+                        {item.after_image_snapshot && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#059669', fontWeight: 600 }}>
+                            <span>Cleaned In:</span>
+                            <span>{item.resolution_time_minutes || 95} mins (SLA Met)</span>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', paddingTop: '6px' }}>
-                        <button
-                          onClick={() => navigate("Map")}
-                          style={{
-                            flex: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '4px',
-                            padding: '6px 10px',
-                            borderRadius: '6px',
-                            background: 'rgba(59, 130, 246, 0.1)',
-                            color: '#2563EB',
-                            border: '1px solid rgba(59, 130, 246, 0.3)',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          <MapPin size={12} /> View on Map
-                        </button>
-                        <a
-                          href={`https://www.google.com/maps?q=${item.lat || item.latitude},${item.lng || item.longitude}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '4px',
-                            padding: '6px 10px',
-                            borderRadius: '6px',
-                            background: '#10B981',
-                            color: '#fff',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            textDecoration: 'none'
-                          }}
-                        >
-                          <ExternalLink size={12} /> Google Maps
-                        </a>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteSnapshot(item.id || item.tracking_id, item.tracking_id, e)}
-                          title="Delete snapshot"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '6px 9px',
-                            borderRadius: '6px',
-                            background: 'rgba(239, 68, 68, 0.1)',
-                            color: '#DC2626',
-                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                      {/* Primary Verification Action Button */}
+                      <div style={{ marginTop: 'auto', paddingTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {item.status === 'Cleaned' && item.after_image_snapshot ? (
+                          <button
+                            type="button"
+                            onClick={() => setModalSnapshot(item)}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '6px',
+                              padding: '7px 10px',
+                              borderRadius: '7px',
+                              background: 'rgba(16, 185, 129, 0.12)',
+                              color: '#059669',
+                              border: '1.5px solid #10B981',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <CheckCircle size={13} color="#10B981" /> Inspect Before vs After (तुलना पहा)
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setModalSnapshot(item)}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '6px',
+                              padding: '7px 10px',
+                              borderRadius: '7px',
+                              background: '#10B981',
+                              color: '#fff',
+                              border: 'none',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <ShieldCheck size={13} /> Verify & Record Cleaned (स्वच्छता नोंदवा)
+                          </button>
+                        )}
+
+                        {/* Secondary Quick Action Buttons */}
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button
+                            onClick={() => navigate("Map")}
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '4px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              background: 'rgba(59, 130, 246, 0.1)',
+                              color: '#2563EB',
+                              border: '1px solid rgba(59, 130, 246, 0.3)',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <MapPin size={11} /> View Map
+                          </button>
+                          <a
+                            href={`https://www.google.com/maps?q=${item.lat || item.latitude},${item.lng || item.longitude}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: '4px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              background: 'var(--surface-2)',
+                              color: 'var(--ink)',
+                              border: '1px solid var(--line)',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              textDecoration: 'none'
+                            }}
+                          >
+                            <ExternalLink size={11} /> Maps
+                          </a>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteSnapshot(item.id || item.tracking_id, item.tracking_id, e)}
+                            title="Delete snapshot"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              color: '#DC2626',
+                              border: '1px solid rgba(239, 68, 68, 0.3)',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -636,13 +812,14 @@ export default function Dashboard({ navigate }) {
                 background: 'var(--surface)',
                 borderRadius: '16px',
                 border: '1px solid var(--line)',
-                maxWidth: '780px',
+                maxWidth: modalSnapshot.after_image_snapshot ? '960px' : '780px',
                 width: '100%',
-                maxHeight: '90vh',
+                maxHeight: '92vh',
                 overflowY: 'auto',
                 boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.45)',
                 display: 'flex',
-                flexDirection: 'column'
+                flexDirection: 'column',
+                transition: 'max-width 0.2s ease'
               }}
               onClick={(e) => e.stopPropagation()}
             >
@@ -660,17 +837,17 @@ export default function Dashboard({ navigate }) {
                     width: '32px',
                     height: '32px',
                     borderRadius: '8px',
-                    background: '#10B981',
+                    background: modalSnapshot.status === 'Cleaned' ? '#10B981' : '#F59E0B',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     color: '#fff'
                   }}>
-                    <Camera size={18} />
+                    {modalSnapshot.status === 'Cleaned' ? <CheckCircle size={18} /> : <Camera size={18} />}
                   </div>
                   <div>
                     <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--ink)' }}>
-                      AI Waste Incident Snapshot · {modalSnapshot.tracking_id}
+                      {modalSnapshot.status === 'Cleaned' ? 'Sanitary Audit: Before vs After Verification' : 'AI Waste Incident Snapshot'} · {modalSnapshot.tracking_id}
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
                       {modalSnapshot.ward?.name || 'Nashik Municipal Corporation'}
@@ -696,19 +873,65 @@ export default function Dashboard({ navigate }) {
                 </button>
               </div>
 
-              {/* Modal Image Body */}
-              <div style={{ position: 'relative', background: '#090d16', minHeight: '340px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <img
-                  src={modalSnapshot.image_snapshot}
-                  alt={`Incident ${modalSnapshot.tracking_id}`}
-                  style={{
-                    width: '100%',
-                    maxHeight: '480px',
-                    objectFit: 'contain',
-                    display: 'block'
-                  }}
-                />
-              </div>
+              {/* Modal Body: Either Side-by-Side (Before & After) OR Single Snapshot with Verification Form */}
+              {modalSnapshot.after_image_snapshot ? (
+                /* SIDE-BY-SIDE BEFORE & AFTER COMPARISON */
+                <div style={{ background: '#090d16', padding: '16px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+                    {/* LEFT: BEFORE (कचऱ्याचा ढीग) */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ background: '#DC2626', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '3px 8px', borderRadius: '4px', letterSpacing: '0.4px' }}>
+                          🔴 BEFORE: कचऱ्याचा ढीग (Detected Dump)
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                          {modalSnapshot.date} · {modalSnapshot.time}
+                        </span>
+                      </div>
+                      <div style={{ borderRadius: '8px', overflow: 'hidden', border: '2px solid rgba(239, 68, 68, 0.6)', background: '#000' }}>
+                        <img
+                          src={modalSnapshot.image_snapshot}
+                          alt="Before Cleaning"
+                          style={{ width: '100%', maxHeight: '380px', objectFit: 'contain', display: 'block' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* RIGHT: AFTER (स्वच्छ रस्ता) */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ background: '#10B981', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '3px 8px', borderRadius: '4px', letterSpacing: '0.4px' }}>
+                          🟢 AFTER: स्वच्छ रस्ता (Verified Cleaned)
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#4ade80', fontWeight: 700 }}>
+                          ⏱️ Cleaned in {modalSnapshot.resolution_time_minutes || 95}m
+                        </span>
+                      </div>
+                      <div style={{ borderRadius: '8px', overflow: 'hidden', border: '2px solid rgba(16, 185, 129, 0.6)', background: '#000' }}>
+                        <img
+                          src={modalSnapshot.after_image_snapshot}
+                          alt="After Cleaning"
+                          style={{ width: '100%', maxHeight: '380px', objectFit: 'contain', display: 'block' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* SINGLE BEFORE SNAPSHOT */
+                <div style={{ position: 'relative', background: '#090d16', minHeight: '320px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img
+                    src={modalSnapshot.image_snapshot}
+                    alt={`Incident ${modalSnapshot.tracking_id}`}
+                    style={{
+                      width: '100%',
+                      maxHeight: '440px',
+                      objectFit: 'contain',
+                      display: 'block'
+                    }}
+                  />
+                </div>
+              )}
 
               {/* Modal Details Grid */}
               <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -736,20 +959,113 @@ export default function Dashboard({ navigate }) {
                     </b>
                   </div>
                   <div>
-                    <div style={{ color: 'var(--muted)' }}>Class & Confidence:</div>
-                    <b style={{ color: '#DC2626', fontSize: '13px' }}>{modalSnapshot.waste_type || modalSnapshot.type} ({modalSnapshot.confidence})</b>
+                    <div style={{ color: 'var(--muted)' }}>Class & Severity:</div>
+                    <b style={{ color: '#DC2626', fontSize: '13px' }}>{modalSnapshot.waste_type || modalSnapshot.type} ({modalSnapshot.confidence || '95%'})</b>
                   </div>
                   <div>
-                    <div style={{ color: 'var(--muted)' }}>Assigned Vehicle:</div>
-                    <b style={{ color: 'var(--ink)', fontSize: '13px' }}>{modalSnapshot.assigned_vehicle || 'MH-15-EM-4091 (Ghanta Gadi)'}</b>
+                    <div style={{ color: 'var(--muted)' }}>Cleanliness Status:</div>
+                    <b style={{ color: modalSnapshot.status === 'Cleaned' ? '#10B981' : '#F59E0B', fontSize: '13px' }}>
+                      {modalSnapshot.status} {modalSnapshot.after_image_snapshot ? '· Audited Proof' : ''}
+                    </b>
                   </div>
                   <div>
-                    <div style={{ color: 'var(--muted)' }}>Timestamp:</div>
-                    <b style={{ color: 'var(--ink)', fontSize: '13px' }}>{modalSnapshot.date || 'Today'} · {modalSnapshot.time}</b>
+                    <div style={{ color: 'var(--muted)' }}>{modalSnapshot.status === 'Cleaned' ? 'Cleaned Timestamp:' : 'Detected Timestamp:'}</div>
+                    <b style={{ color: 'var(--ink)', fontSize: '13px' }}>
+                      {modalSnapshot.cleaned_at_formatted || modalSnapshot.date || 'Today'} · {modalSnapshot.time || ''}
+                    </b>
                   </div>
+                  {modalSnapshot.cleaning_officer && (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div style={{ color: 'var(--muted)' }}>Sanitary Verification Officer:</div>
+                      <b style={{ color: '#059669', fontSize: '13px' }}>
+                        🛡️ {modalSnapshot.cleaning_officer} (SLA: {modalSnapshot.resolution_time_minutes || 95} mins achieved)
+                      </b>
+                    </div>
+                  )}
                 </div>
 
-                {/* Action Buttons */}
+                {/* Verification Action Form if not cleaned yet */}
+                {modalSnapshot.status !== 'Cleaned' && (
+                  <div style={{
+                    background: 'rgba(16, 185, 129, 0.08)',
+                    border: '1.5px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: '12px',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '12px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <ShieldCheck size={20} color="#10B981" />
+                      <b style={{ color: 'var(--ink)', fontSize: '14px' }}>
+                        Record Sanitary Cleaning Verification (स्वच्छता पडताळणी नोंदवा)
+                      </b>
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                      Confirm that the municipal sanitation crew has cleaned this roadside waste. You can upload an "After" photo or submit an official verified clean audit stamp.
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>
+                          Sanitary Inspector / Officer Name:
+                        </label>
+                        <input
+                          type="text"
+                          value={verifyOfficer}
+                          onChange={(e) => setVerifyOfficer(e.target.value)}
+                          placeholder="e.g. Kiran Jadhav (Sanitary Inspector)"
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            borderRadius: '6px',
+                            border: '1px solid var(--line)',
+                            background: 'var(--surface)',
+                            color: 'var(--ink)',
+                            fontSize: '12px'
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted)', display: 'block', marginBottom: '4px' }}>
+                          Upload "After Cleaning" Photo (Optional):
+                        </label>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => setAfterImageFile(e.target.files[0])}
+                          style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '4px' }}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
+                      <button
+                        type="button"
+                        disabled={verifyLoading}
+                        onClick={() => handleVerifyCleaning(modalSnapshot.id || modalSnapshot.tracking_id, verifyOfficer, afterImageFile)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '10px 18px',
+                          borderRadius: '8px',
+                          background: '#10B981',
+                          color: '#fff',
+                          border: 'none',
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          cursor: verifyLoading ? 'not-allowed' : 'pointer',
+                          boxShadow: '0 2px 8px rgba(16, 185, 129, 0.3)'
+                        }}
+                      >
+                        <CheckCircle size={16} /> {verifyLoading ? 'Recording Verification...' : '✅ Verify Cleaned & Generate Audit Proof (स्वच्छता पूर्ण झाली)'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer Action Buttons */}
                 <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   <button
                     type="button"
