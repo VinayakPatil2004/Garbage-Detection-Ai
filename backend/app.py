@@ -3,6 +3,7 @@ os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 import io
 import time
 import base64
+import queue
 from collections import deque
 import numpy as np
 import cv2
@@ -961,6 +962,117 @@ def field_ai_worker():
 ai_worker_thread = threading.Thread(target=field_ai_worker, daemon=True)
 ai_worker_thread.start()
 
+# --- Dashcam Ride Video Recording Subsystem ---
+RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
+
+frame_recording_queue = queue.Queue(maxsize=300)
+is_recording_enabled = True
+active_recording_info = {
+    "is_recording": False,
+    "current_file": None,
+    "frames_written": 0,
+    "start_time": 0,
+    "duration_seconds": 0
+}
+
+def ride_video_recorder_worker():
+    """
+    Dedicated Background Thread for Mobile Dashcam Ride Video Recording:
+    - Encodes raw video frames asynchronously without slowing down stream upload (<0.02ms latency).
+    - Writes MP4 video files at 20 FPS using mp4v codec.
+    - Automatically burns GPS telemetry and vehicle ID HUD on the video.
+    - Finalizes and flushes MP4 file cleanly when streaming stops (> 6.0s silence).
+    """
+    global is_recording_enabled
+    writer = None
+    curr_filename = None
+    curr_filepath = None
+    last_frame_time = 0
+    frames_count = 0
+    frame_size = None
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+    while True:
+        try:
+            try:
+                item = frame_recording_queue.get(timeout=1.0)
+            except queue.Empty:
+                item = None
+
+            now = time.time()
+
+            # If stream has paused/stopped for > 6.0 seconds, finalize and flush MP4 file cleanly
+            if writer is not None and (now - last_frame_time > 6.0):
+                writer.release()
+                writer = None
+                size_mb = round(os.path.getsize(curr_filepath) / (1024 * 1024), 2) if (curr_filepath and os.path.exists(curr_filepath)) else 0
+                print(f"🎬 Dashcam Ride Video Finalized: {curr_filename} ({frames_count} frames, {size_mb} MB)")
+                active_recording_info["is_recording"] = False
+                active_recording_info["current_file"] = None
+                active_recording_info["frames_written"] = 0
+                frames_count = 0
+                continue
+
+            if item is None or not is_recording_enabled:
+                continue
+
+            raw_bytes, frame_ts, gps_telemetry, preds = item
+            last_frame_time = frame_ts
+
+            # Decode frame
+            nparr = np.frombuffer(raw_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+
+            fh, fw = frame.shape[:2]
+
+            # If no active writer, frame size changed, or 15 mins reached (18000 frames), start new file
+            if writer is None or frame_size != (fw, fh) or frames_count >= 18000:
+                if writer is not None:
+                    writer.release()
+
+                ts_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                curr_filename = f"ride_NMC_{ts_str}.mp4"
+                curr_filepath = os.path.join(RECORDINGS_DIR, curr_filename)
+                frame_size = (fw, fh)
+                writer = cv2.VideoWriter(curr_filepath, fourcc, 20.0, (fw, fh))
+                frames_count = 0
+                active_recording_info["is_recording"] = True
+                active_recording_info["current_file"] = curr_filename
+                active_recording_info["start_time"] = now
+                print(f"🎥 Started Dashcam Ride Video: {curr_filename} ({fw}x{fh} @ 20 FPS)")
+
+            # Burn subtle GPS HUD banner at bottom
+            banner_h = max(30, int(fh * 0.055))
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, fh - banner_h), (fw, fh), (15, 23, 42), -1)
+            cv2.addWeighted(overlay, 0.78, frame, 0.22, 0, frame)
+
+            lat = gps_telemetry.get("latitude", 20.0108)
+            lng = gps_telemetry.get("longitude", 73.7646)
+            spd = gps_telemetry.get("speed_kmh", 0.0)
+            v_id = gps_telemetry.get("vehicle_id", "MH-17-AG-501")
+            hud_text = f"SWACHH-AI NMC RECORDER | GPS: {lat:.5f}N, {lng:.5f}E | Speed: {spd:.0f} km/h | Unit: {v_id} | {datetime.fromtimestamp(frame_ts).strftime('%d-%b %H:%M:%S')}"
+            cv2.putText(frame, hud_text, (10, fh - int(banner_h * 0.3)), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (52, 211, 153), 1, cv2.LINE_AA)
+
+            # Draw bounding boxes if waste detected
+            if preds and len(preds) > 0:
+                draw_ai_detections_on_frame(frame, preds)
+
+            writer.write(frame)
+            frames_count += 1
+            active_recording_info["frames_written"] = frames_count
+            active_recording_info["duration_seconds"] = round(frames_count / 20.0, 1)
+
+        except Exception as e:
+            print(f"Notice: Ride recorder worker: {e}")
+            time.sleep(0.05)
+
+recorder_thread = threading.Thread(target=ride_video_recorder_worker, daemon=True)
+recorder_thread.start()
+
 @app.route('/api/dashboard/ward_leaderboard', methods=['GET'])
 def get_ward_leaderboard_api():
     """Returns Ward Cleanliness Performance Index (CPI) Leaderboard across Nashik Municipal Wards (Pillar 5)."""
@@ -1163,6 +1275,62 @@ def get_before_after_gallery_endpoint():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- Dashcam Ride Video Recording API Endpoints ---
+@app.route('/api/recordings', methods=['GET'])
+def list_recordings():
+    """Lists all recorded dashcam MP4 video files with duration and size."""
+    try:
+        files = []
+        if os.path.exists(RECORDINGS_DIR):
+            for fname in sorted(os.listdir(RECORDINGS_DIR), reverse=True):
+                if fname.endswith('.mp4'):
+                    fpath = os.path.join(RECORDINGS_DIR, fname)
+                    st = os.stat(fpath)
+                    size_mb = round(st.st_size / (1024 * 1024), 2)
+                    mtime_str = datetime.fromtimestamp(st.st_mtime).strftime("%d-%b-%Y %I:%M %p")
+                    files.append({
+                        "filename": fname,
+                        "size_mb": size_mb,
+                        "modified_at": mtime_str,
+                        "download_url": f"/api/recordings/download/{fname}",
+                        "stream_url": f"/api/recordings/stream/{fname}"
+                    })
+        return jsonify({
+            "status": "success",
+            "active_recording": active_recording_info,
+            "recording_enabled": is_recording_enabled,
+            "total_recordings": len(files),
+            "recordings": files
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/recordings/download/<path:filename>', methods=['GET'])
+def download_recording(filename):
+    """Download recorded ride MP4 file."""
+    return send_from_directory(RECORDINGS_DIR, filename, as_attachment=True)
+
+@app.route('/api/recordings/stream/<path:filename>', methods=['GET'])
+def stream_recording_file(filename):
+    """Stream recorded ride MP4 file for in-browser playback."""
+    return send_from_directory(RECORDINGS_DIR, filename, mimetype='video/mp4')
+
+@app.route('/api/recordings/toggle', methods=['POST'])
+def toggle_recording():
+    """Toggles ride recording ON or OFF."""
+    global is_recording_enabled
+    data = request.get_json(silent=True) or {}
+    enable = data.get("enable")
+    if enable is not None:
+        is_recording_enabled = bool(enable)
+    else:
+        is_recording_enabled = not is_recording_enabled
+    return jsonify({
+        "status": "success",
+        "recording_enabled": is_recording_enabled,
+        "active_info": active_recording_info
+    })
+
 @app.route('/api/upload_frame', methods=['POST'])
 def upload_frame():
     """
@@ -1221,6 +1389,13 @@ def upload_frame():
         latest_field_data["raw_bytes"] = data
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
+
+        # Enqueue to Dashcam Ride Video Recorder (non-blocking <0.02ms)
+        if is_recording_enabled:
+            try:
+                frame_recording_queue.put_nowait((data, time.time(), latest_field_data.get("gps", {}), latest_field_data.get("predictions", [])))
+            except queue.Full:
+                pass
 
         # Decoupled zero-loss overlay pipeline (<3ms): 
         # When waste detected or GPS HUD active: overlay targeting brackets and GPS HUD at 90% crisp JPEG quality.

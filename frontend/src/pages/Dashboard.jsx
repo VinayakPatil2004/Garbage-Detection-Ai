@@ -49,6 +49,24 @@ export default function Dashboard({ navigate }) {
     const [afterImageFile, setAfterImageFile] = useState(null);
     const [wardLeaderboard, setWardLeaderboard] = useState([]);
     const [showLeaderboard, setShowLeaderboard] = useState(true);
+    const [recordings, setRecordings] = useState([]);
+    const [activeRecInfo, setActiveRecInfo] = useState({});
+    const [selectedVideoModal, setSelectedVideoModal] = useState(null);
+
+    const fetchRecordings = async () => {
+      try {
+        const res = await fetch(`/api/recordings?_t=${Date.now()}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "success") {
+            setRecordings(data.recordings || []);
+            setActiveRecInfo(data.active_recording || {});
+          }
+        }
+      } catch (e) {
+        console.warn("Could not fetch recordings:", e);
+      }
+    };
 
     const fetchWardLeaderboard = async () => {
       try {
@@ -159,9 +177,11 @@ export default function Dashboard({ navigate }) {
     useEffect(() => {
       fetchWardSnapshots(selectedWard);
       fetchWardLeaderboard();
+      fetchRecordings();
       const interval = setInterval(() => {
         fetchWardSnapshots(selectedWard);
         fetchWardLeaderboard();
+        fetchRecordings();
       }, 4000);
       return () => clearInterval(interval);
     }, [selectedWard]);
@@ -375,6 +395,132 @@ export default function Dashboard({ navigate }) {
                 </table>
               </div>
             )}
+          </Card>
+
+          {/* AI Dashcam Ride Video Archive Card */}
+          <Card className="span-two" style={{ gridColumn: '1 / -1', padding: '18px 22px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Video size={20} color="#3B82F6" />
+                  <b style={{ fontSize: '16px', color: 'var(--ink)' }}>AI Dashcam Field Video Archive (सवारी व्हिडिओ रेकॉर्डिंग्ज)</b>
+                  {activeRecInfo.is_recording ? (
+                    <span style={{ background: '#DC2626', color: '#fff', fontSize: '11px', fontWeight: 800, padding: '2px 8px', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#fff' }} /> RECORDING LIVE ({activeRecInfo.duration_seconds || 0}s)
+                    </span>
+                  ) : (
+                    <span style={{ background: 'rgba(59, 130, 246, 0.12)', color: '#2563EB', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '12px' }}>
+                      {recordings.length} VIDEOS ARCHIVED
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '4px' }}>
+                  Continuous dashcam MP4 video footage recorded from the mobile streamer with burned-in GPS HUD & AI waste bounding boxes for benchmark accuracy audits.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={fetchRecordings}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 12px',
+                    borderRadius: '8px',
+                    background: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--ink)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer'
+                  }}
+                  title="Refresh video list"
+                >
+                  <RefreshCw size={13} /> Refresh Videos
+                </button>
+              </div>
+            </div>
+
+            {/* Video List Grid */}
+            <div style={{ marginTop: '14px' }}>
+              {recordings.length === 0 ? (
+                <div style={{ padding: '18px', textAlign: 'center', color: 'var(--muted)', background: 'var(--surface-2)', borderRadius: '10px', fontSize: '13px' }}>
+                  <Video size={24} color="var(--muted-2)" style={{ marginBottom: '6px' }} />
+                  <div>No ride videos recorded yet. Videos record automatically as soon as mobile camera streams on <code>/cam</code>.</div>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+                  {recordings.slice(0, 6).map((rec, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        borderRadius: '10px',
+                        padding: '12px 14px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px',
+                        transition: 'transform 0.15s ease'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <b style={{ fontSize: '13px', color: 'var(--ink)', fontFamily: 'monospace' }}>{rec.filename}</b>
+                          <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>{rec.modified_at}</div>
+                        </div>
+                        <span style={{ background: '#3B82F6', color: '#fff', fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '6px' }}>
+                          {rec.size_mb} MB
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                        <button
+                          onClick={() => setSelectedVideoModal(rec)}
+                          style={{
+                            flex: 1,
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            background: '#10B981',
+                            color: '#fff',
+                            border: 'none',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '4px'
+                          }}
+                        >
+                          <Play size={12} /> Play Video
+                        </button>
+                        <a
+                          href={rec.download_url}
+                          download={rec.filename}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            background: 'var(--surface)',
+                            border: '1px solid var(--line)',
+                            color: 'var(--ink)',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            textDecoration: 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                        >
+                          <Download size={12} /> Save
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </Card>
 
           {/* Nashik Wards AI Snapshots Section (Full Width) */}
@@ -1329,6 +1475,59 @@ export default function Dashboard({ navigate }) {
                     <ExternalLink size={15} /> Open in Google Maps
                   </a>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Dashcam Video Playback Modal */}
+        {selectedVideoModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0,0,0,0.85)',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '20px'
+            }}
+            onClick={() => setSelectedVideoModal(null)}
+          >
+            <div
+              style={{
+                background: 'var(--surface)',
+                borderRadius: '16px',
+                maxWidth: '850px',
+                width: '100%',
+                overflow: 'hidden',
+                boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ padding: '14px 20px', background: 'var(--surface-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <b style={{ fontSize: '15px', color: 'var(--ink)' }}>📹 Ride Video Playback: {selectedVideoModal.filename}</b>
+                  <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>Recorded Field Stream · {selectedVideoModal.size_mb} MB · {selectedVideoModal.modified_at}</div>
+                </div>
+                <button
+                  onClick={() => setSelectedVideoModal(null)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center' }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <div style={{ padding: '16px', background: '#000', display: 'flex', justifyContent: 'center' }}>
+                <video
+                  controls
+                  autoPlay
+                  src={selectedVideoModal.stream_url}
+                  style={{ width: '100%', maxHeight: '500px', borderRadius: '8px' }}
+                />
               </div>
             </div>
           </div>
