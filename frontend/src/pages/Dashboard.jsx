@@ -1525,9 +1525,13 @@ export default function Dashboard({ navigate }) {
                 <video
                   controls
                   autoPlay
+                  playsInline
+                  preload="auto"
                   src={selectedVideoModal.stream_url}
                   style={{ width: '100%', maxHeight: '500px', borderRadius: '8px' }}
-                />
+                >
+                  Your browser does not support the video tag.
+                </video>
               </div>
             </div>
           </div>

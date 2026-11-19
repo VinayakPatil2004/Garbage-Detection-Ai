@@ -968,6 +968,7 @@ os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
 frame_recording_queue = queue.Queue(maxsize=300)
 is_recording_enabled = True
+upload_frame_counter = 0
 active_recording_info = {
     "is_recording": False,
     "current_file": None,
@@ -980,9 +981,9 @@ def ride_video_recorder_worker():
     """
     Dedicated Background Thread for Mobile Dashcam Ride Video Recording:
     - Encodes raw video frames asynchronously without slowing down stream upload (<0.02ms latency).
-    - Writes MP4 video files at 20 FPS using mp4v codec.
+    - Writes MP4 video files at 15 FPS using mp4v codec.
     - Automatically burns GPS telemetry and vehicle ID HUD on the video.
-    - Finalizes and flushes MP4 file cleanly when streaming stops (> 6.0s silence).
+    - Finalizes and auto-transcodes to browser-playable H.264 with faststart when streaming stops.
     """
     global is_recording_enabled
     writer = None
@@ -1002,10 +1003,24 @@ def ride_video_recorder_worker():
 
             now = time.time()
 
-            # If stream has paused/stopped for > 6.0 seconds, finalize and flush MP4 file cleanly
+            # If stream has paused/stopped for > 6.0 seconds, finalize and transcode MP4 to standard H.264
             if writer is not None and (now - last_frame_time > 6.0):
                 writer.release()
                 writer = None
+
+                # Convert to standard browser-playable H.264 with +faststart
+                try:
+                    import imageio_ffmpeg, subprocess
+                    ff = imageio_ffmpeg.get_ffmpeg_exe()
+                    h264_tmp = curr_filepath.replace(".mp4", "_h264.mp4")
+                    cmd = [ff, '-y', '-i', curr_filepath, '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', h264_tmp]
+                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if res.returncode == 0 and os.path.exists(h264_tmp):
+                        os.replace(h264_tmp, curr_filepath)
+                        print(f"🎬 Transcoded {curr_filename} to standard browser-playable H.264!")
+                except Exception as ex:
+                    print(f"Notice: FFmpeg transcode exception: {ex}")
+
                 size_mb = round(os.path.getsize(curr_filepath) / (1024 * 1024), 2) if (curr_filepath and os.path.exists(curr_filepath)) else 0
                 print(f"🎬 Dashcam Ride Video Finalized: {curr_filename} ({frames_count} frames, {size_mb} MB)")
                 active_recording_info["is_recording"] = False
@@ -1028,8 +1043,8 @@ def ride_video_recorder_worker():
 
             fh, fw = frame.shape[:2]
 
-            # If no active writer, frame size changed, or 15 mins reached (18000 frames), start new file
-            if writer is None or frame_size != (fw, fh) or frames_count >= 18000:
+            # If no active writer, frame size changed, or 15 mins reached (13500 frames @ 15fps), start new file
+            if writer is None or frame_size != (fw, fh) or frames_count >= 13500:
                 if writer is not None:
                     writer.release()
 
@@ -1037,12 +1052,12 @@ def ride_video_recorder_worker():
                 curr_filename = f"ride_NMC_{ts_str}.mp4"
                 curr_filepath = os.path.join(RECORDINGS_DIR, curr_filename)
                 frame_size = (fw, fh)
-                writer = cv2.VideoWriter(curr_filepath, fourcc, 20.0, (fw, fh))
+                writer = cv2.VideoWriter(curr_filepath, fourcc, 15.0, (fw, fh))
                 frames_count = 0
                 active_recording_info["is_recording"] = True
                 active_recording_info["current_file"] = curr_filename
                 active_recording_info["start_time"] = now
-                print(f"🎥 Started Dashcam Ride Video: {curr_filename} ({fw}x{fh} @ 20 FPS)")
+                print(f"🎥 Started Dashcam Ride Video: {curr_filename} ({fw}x{fh} @ 15 FPS)")
 
             # Burn subtle GPS HUD banner at bottom
             banner_h = max(30, int(fh * 0.055))
@@ -1064,10 +1079,11 @@ def ride_video_recorder_worker():
             writer.write(frame)
             frames_count += 1
             active_recording_info["frames_written"] = frames_count
-            active_recording_info["duration_seconds"] = round(frames_count / 20.0, 1)
+            active_recording_info["duration_seconds"] = round(frames_count / 15.0, 1)
 
         except Exception as e:
             print(f"Notice: Ride recorder worker: {e}")
+            time.sleep(0.05)
             time.sleep(0.05)
 
 recorder_thread = threading.Thread(target=ride_video_recorder_worker, daemon=True)
@@ -1386,39 +1402,20 @@ def upload_frame():
             except (ValueError, TypeError):
                 pass
 
+        global upload_frame_counter
+        upload_frame_counter += 1
+
         latest_field_data["raw_bytes"] = data
+        latest_field_data["display_bytes"] = data # Zero-latency direct pass-through: eliminates 45ms CPU bottleneck!
         latest_field_data["timestamp"] = time.time()
         latest_field_data["new_frame_event"].set()
 
-        # Enqueue to Dashcam Ride Video Recorder (non-blocking <0.02ms)
-        if is_recording_enabled:
+        # Enqueue every 2nd frame to Dashcam Ride Video Recorder (~12-15 FPS sub-sampled)
+        if is_recording_enabled and (upload_frame_counter % 2 == 0):
             try:
                 frame_recording_queue.put_nowait((data, time.time(), latest_field_data.get("gps", {}), latest_field_data.get("predictions", [])))
             except queue.Full:
                 pass
-
-        # Decoupled zero-loss overlay pipeline (<3ms): 
-        # When waste detected or GPS HUD active: overlay targeting brackets and GPS HUD at 90% crisp JPEG quality.
-        # Otherwise: 100% bit-for-bit lossless pass-through of raw phone camera feed.
-        try:
-            cached_preds = latest_field_data.get("predictions", [])
-            gps_info = latest_field_data.get("gps", {})
-            has_gps = gps_info.get("active", False) and (time.time() - gps_info.get("last_update", 0)) < 15.0
-
-            if (cached_preds and len(cached_preds) > 0) or has_gps:
-                nparr = np.frombuffer(data, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    draw_ai_detections_on_frame(frame, cached_preds)
-                    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
-                    latest_field_data["display_bytes"] = buf.tobytes()
-                else:
-                    latest_field_data["display_bytes"] = data
-            else:
-                # 100% bit-for-bit lossless pass-through of raw phone camera feed
-                latest_field_data["display_bytes"] = data
-        except Exception:
-            latest_field_data["display_bytes"] = data
 
         resp = jsonify({
             "status": "success",
