@@ -203,31 +203,7 @@ def init_db():
             if db_type == "sqlite":
                 conn.commit()
 
-        # Seed initial detections if empty
-        cursor.execute("SELECT COUNT(*) AS cnt FROM detections")
-        row = cursor.fetchone()
-        count = row['cnt'] if isinstance(row, dict) else row[0]
-        if count == 0:
-            sample_dets = [
-                ("DET-20261117-001", "Market Yard Main Gate", 18.5204, 73.8567, "Plastic", 96.5, "High", "In Progress", "TRK-102", "Plastic carry bags scattered near entrance"),
-                ("DET-20261117-002", "Station Road Corner", 18.5290, 73.8740, "Cardboard", 88.0, "Medium", "Assigned", "TRK-101", "Packaging boxes dumped on pavement"),
-                ("DET-20261117-003", "Riverside Park South", 18.5140, 73.8320, "Organic", 92.5, "Low", "Cleaned", "TRK-103", "Vegetable scraps and organic waste - cleared"),
-                ("DET-20261117-004", "Central Bus Station", 18.5310, 73.8680, "Metal", 91.0, "Critical", "Pending", None, "Crushed beverage cans and metal debris"),
-                ("DET-20261117-005", "College Road Crossing", 18.5220, 73.8450, "Paper", 84.5, "Low", "Cleaned", "TRK-104", "Newspaper flyers - cleaned by sanitary staff")
-            ]
-            for d in sample_dets:
-                if db_type == "mysql":
-                    cursor.execute("""
-                    INSERT INTO detections (tracking_id, location_name, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, d)
-                else:
-                    cursor.execute("""
-                    INSERT INTO detections (tracking_id, location_name, latitude, longitude, waste_type, confidence, severity, status, assigned_vehicle, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, d)
-            if db_type == "sqlite":
-                conn.commit()
+        # Detections table is populated strictly from real field AI captures (Zero fake seeds)
 
         if db_type == "mysql":
             print("✅ Database Connected: XAMPP MySQL (localhost:3306 -> garbage_detection_db)!")
